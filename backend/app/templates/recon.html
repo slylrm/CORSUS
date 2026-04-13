@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CORSUS v1.0 | Cyber-Ops Security Scanner</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}?v=5">
+</head>
+<body>
+  <div class="scanline"></div>
+
+  <nav class="topbar">
+    <div class="brand"><span class="material-symbols-outlined">security</span><span>CORSUS v1.0</span></div>
+    <div class="topbar-right">
+      <div class="system-state"><span class="status-dot idle" id="statusIndicator"></span><span id="statusText">SYSTEM READY</span></div>
+      <div class="topbar-actions">
+        <button class="icon-button" type="button" aria-label="Sensors"><span class="material-symbols-outlined">sensors</span></button>
+        <button class="icon-button" type="button" aria-label="Settings"><span class="material-symbols-outlined">settings</span></button>
+        <div class="user-chip"><span class="material-symbols-outlined">person</span></div>
+      </div>
+    </div>
+  </nav>
+
+  <aside class="side-nav" aria-label="Primary">
+    <button class="nav-item active" type="button"><span class="material-symbols-outlined">radar</span><span>Operations</span></button>
+    <button class="nav-item" type="button"><span class="material-symbols-outlined">target</span><span>Targeting</span></button>
+    <button class="nav-item" type="button"><span class="material-symbols-outlined">analytics</span><span>Analysis</span></button>
+    <button class="nav-item" type="button"><span class="material-symbols-outlined">terminal</span><span>Logs</span></button>
+    <div class="side-nav-bottom">
+      <button class="icon-button" type="button" aria-label="Help"><span class="material-symbols-outlined">help</span></button>
+      <button class="icon-button" type="button" aria-label="Settings"><span class="material-symbols-outlined">settings</span></button>
+    </div>
+  </aside>
+
+  <main class="dashboard-shell">
+    <section class="hero-section">
+      <div class="section-kicker">Target Acquisition</div>
+      <form id="scanForm" class="scan-form">
+        <div class="target-field">
+          <label class="sr-only" for="target">Target URL</label>
+          <input id="target" name="target" type="text" placeholder="https://target.com" required>
+          <div class="target-tags"><span>IPV4/V6</span><span>SSL</span></div>
+        </div>
+        <div class="hero-actions">
+          <button type="submit" class="action-button action-button-primary"><span class="material-symbols-outlined">play_arrow</span><span>Start Scan</span></button>
+          <a id="downloadJson" class="action-button action-button-secondary hidden" href="#" download>Export JSON</a>
+          <a id="downloadPdf" class="action-button action-button-secondary hidden" href="#" download>Export PDF</a>
+        </div>
+      </form>
+      <div class="progress-panel">
+        <div class="progress-copy"><span id="progressMessage">Awaiting target input.</span><span id="progressValue">0%</span></div>
+        <div class="progress-track"><div class="progress-bar" id="progressBar"></div></div>
+      </div>
+    </section>
+
+    <section class="bento-grid">
+      <article class="panel">
+        <div class="panel-header">
+          <div class="panel-title-wrap">
+            <div class="panel-icon"><span class="material-symbols-outlined">shield</span></div>
+            <div><h2>Subdomains</h2><p>Enumeration complete</p></div>
+          </div>
+          <div class="panel-badge" id="subdomainCount">0 FOUND</div>
+        </div>
+        <ul class="result-list" id="subdomainsList"><li class="empty-row">Awaiting scan results.</li></ul>
+      </article>
+
+      <article class="panel">
+        <div class="panel-header">
+          <div class="panel-title-wrap">
+            <div class="panel-icon"><span class="material-symbols-outlined">lock</span></div>
+            <div><h2>SSL / TLS Certificate</h2><p>Encryption layer audit</p></div>
+          </div>
+          <div class="metric-grade" id="sslGrade">-</div>
+        </div>
+        <div class="detail-grid">
+          <div class="detail-box"><span>Issuer</span><strong id="sslIssuer">Pending</strong></div>
+          <div class="detail-box"><span>Expires In</span><strong id="sslExpiry">-</strong></div>
+        </div>
+        <div class="warning-box" id="sslWarning">No TLS findings yet.</div>
+      </article>
+
+      <article class="panel">
+        <div class="panel-header">
+          <div class="panel-title-wrap">
+            <div class="panel-icon"><span class="material-symbols-outlined">folder</span></div>
+            <div><h2>Endpoints</h2><p>Directory discovery</p></div>
+          </div>
+          <div class="panel-meta">Scanned: <span id="pathsScanned">0</span></div>
+        </div>
+        <ul class="result-list endpoint-list" id="directoriesList"><li class="empty-row">Awaiting scan results.</li></ul>
+      </article>
+
+      <article class="panel">
+        <div class="panel-header">
+          <div class="panel-title-wrap">
+            <div class="panel-icon"><span class="material-symbols-outlined">memory</span></div>
+            <div><h2>Tech Fingerprint</h2><p>Stack identification</p></div>
+          </div>
+        </div>
+        <div class="tech-grid" id="techList"><div class="empty-row">Awaiting scan results.</div></div>
+        <div class="reliability-panel">
+          <div class="reliability-copy"><span>Reliability Score</span><span id="reliabilityScore">0%</span></div>
+          <div class="reliability-track"><div class="reliability-bar" id="reliabilityBar"></div></div>
+        </div>
+      </article>
+    </section>
+
+    <section class="bento-grid" style="margin-top: 1.5rem;">
+      <article class="panel" style="grid-column: 1 / -1;">
+        <div class="panel-header">
+          <div class="panel-title-wrap">
+            <div class="panel-icon"><span class="material-symbols-outlined">bug_report</span></div>
+            <div><h2>Vulnerabilities</h2><p>Deep penetrative testing discoveries</p></div>
+          </div>
+          <div class="panel-badge" id="vulnCount">0 FOUND</div>
+        </div>
+        <ul class="result-list endpoint-list" id="vulnList">
+          <li class="empty-row">Awaiting deep scan results.</li>
+        </ul>
+      </article>
+    </section>
+
+    <section class="console-panel">
+      <div class="console-header">
+        <div class="console-title"><span class="material-symbols-outlined">terminal</span><span>Live Console Stream</span></div>
+        <div class="console-lights"><span class="light light-red"></span><span class="light light-green"></span><span class="light light-cyan"></span></div>
+      </div>
+      <div class="console-log" id="consoleLog">
+        <p class="console-line console-line-success">[BOOT] INITIALIZING CORSUS CORE ENGINE...</p>
+        <p class="console-line console-line-default">[BOOT] WAITING FOR TARGET INPUT.</p>
+      </div>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', path='app.js') }}?v=5"></script>
+</body>
+</html>

@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Security Assessment Platform</title>
+    <style>
+        :root {
+            --primary: #1e293b;
+            --primary-dark: #0f172a;
+            --accent: #475569;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --critical: #dc2626;
+            --info: #0ea5e9;
+            --surface: #f8fafc;
+            --border: #cbd5e1;
+            --text: #1e293b;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, var(--primary-dark) 0%, var(--primary) 100%);
+            color: var(--text);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        
+        .card {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        }
+        
+        .card h2 {
+            color: #667eea;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 600;
+        }
+        
+        input[type="url"], select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 1em;
+            transition: border-color 0.3s;
+        }
+        
+        input[type="url"]:focus, select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .tools-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin-top: 10px;
+        }
+        
+        .tool-checkbox {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .tool-checkbox input {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
+        
+        .btn {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 1.1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+        }
+        
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .scan-result {
+            display: none;
+        }
+        
+        .scan-result.active {
+            display: block;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 30px;
+            background: #f0f0f0;
+            border-radius: 15px;
+            overflow: hidden;
+            margin: 20px 0;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            transition: width 0.5s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 600;
+        }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: 600;
+            margin: 10px 0;
+        }
+        
+        .status-pending { background: #ffc107; color: #000; }
+        .status-running { background: #2196F3; color: white; }
+        .status-completed { background: #4CAF50; color: white; }
+        .status-failed { background: #f44336; color: white; }
+        
+        .findings-summary {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 10px;
+            margin: 20px 0;
+        }
+        
+        .finding-box {
+            text-align: center;
+            padding: 15px;
+            border-radius: 10px;
+            color: white;
+        }
+        
+        .finding-critical { background: #d32f2f; }
+        .finding-high { background: #f57c00; }
+        .finding-medium { background: #fbc02d; color: #000; }
+        .finding-low { background: #388e3c; }
+        .finding-info { background: #1976d2; }
+        
+        .finding-box .count {
+            font-size: 2em;
+            font-weight: bold;
+        }
+        
+        .finding-box .label {
+            font-size: 0.9em;
+            margin-top: 5px;
+        }
+        
+        .findings-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .finding-item {
+            padding: 15px;
+            margin-bottom: 10px;
+            border-radius: 8px;
+            border-left: 4px solid;
+        }
+        
+        .finding-item.critical { border-color: #d32f2f; background: #ffebee; }
+        .finding-item.high { border-color: #f57c00; background: #fff3e0; }
+        .finding-item.medium { border-color: #fbc02d; background: #fffde7; }
+        .finding-item.low { border-color: #388e3c; background: #e8f5e9; }
+        .finding-item.info { border-color: #1976d2; background: #e3f2fd; }
+        
+        .finding-item h4 {
+            margin-bottom: 8px;
+            color: #333;
+        }
+        
+        .finding-item p {
+            color: #666;
+            font-size: 0.95em;
+        }
+        
+        .back-link {
+            display: inline-block;
+            margin-top: 20px;
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 600;
+        }
+        
+        .back-link:hover {
+            text-decoration: underline;
+        }
+        
+        @media (max-width: 768px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+            
+            .findings-summary {
+                grid-template-columns: repeat(3, 1fr);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔍 Güvenlik Taraması</h1>
+            <p>Web sitenizin güvenlik taramasını başlatın</p>
+        </div>
+        
+        <div class="main-content">
+            <!-- Tarama Formu -->
+            <div class="card">
+                <h2>🎯 Tarama Ayarları</h2>
+                
+                <form id="scanForm">
+                    <div class="form-group">
+                        <label for="targetUrl">🌐 Hedef Web Sitesi</label>
+                        <input 
+                            type="url" 
+                            id="targetUrl" 
+                            name="targetUrl" 
+                            placeholder="https://example.com"
+                            required
+                        >
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="scanType">⚡ Tarama Tipi</label>
+                        <select id="scanType" name="scanType">
+                            <option value="quick">Hızlı Tarama (5 dk)</option>
+                            <option value="standard" selected>Standart Tarama (10 dk)</option>
+                            <option value="deep">Derin Tarama (20 dk)</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>🔧 Tarama Araçları</label>
+                        <div class="tools-grid">
+                            <div class="tool-checkbox">
+                                <input type="checkbox" id="tool_basic" value="basic" checked>
+                                <label for="tool_basic">Temel Analiz</label>
+                            </div>
+                            <div class="tool-checkbox">
+                                <input type="checkbox" id="tool_headers" value="headers" checked>
+                                <label for="tool_headers">Güvenlik Başlıkları</label>
+                            </div>
+                            <div class="tool-checkbox">
+                                <input type="checkbox" id="tool_ssl" value="ssl" checked>
+                                <label for="tool_ssl">SSL/TLS</label>
+                            </div>
+                            <div class="tool-checkbox">
+                                <input type="checkbox" id="tool_ports" value="ports">
+                                <label for="tool_ports">Port Taraması</label>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <button type="submit" class="btn" id="startScanBtn">
+                        🚀 Taramayı Başlat
+                    </button>
+                </form>
+                
+                <a href="/" class="back-link">← Ana Sayfaya Dön</a>
+            </div>
+            
+            <!-- Tarama Sonuçları -->
+            <div class="card scan-result" id="scanResult">
+                <h2>📊 Tarama Sonuçları</h2>
+                
+                <div id="statusSection">
+                    <span class="status-badge" id="statusBadge">Hazırlanıyor...</span>
+                    <p id="currentTool" style="margin: 10px 0; color: #666;"></p>
+                    
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressBar" style="width: 0%;">0%</div>
+                    </div>
+                </div>
+                
+                <div id="resultsSection" style="display: none;">
+                    <h3>🔍 Bulunan Güvenlik Açıkları</h3>
+                    
+                    <div class="findings-summary" id="findingsSummary"></div>
+                    
+                    <div class="findings-list" id="findingsList"></div>
+                    
+                    <button class="btn" id="viewReportBtn" style="margin-top: 20px;">
+                        📄 Detaylı Raporu Görüntüle
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let scanId = null;
+        let pollInterval = null;
+        
+        // Form submit
+        document.getElementById('scanForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const targetUrl = document.getElementById('targetUrl').value;
+            const scanType = document.getElementById('scanType').value;
+            
+            // Seçili araçları topla
+            const tools = [];
+            document.querySelectorAll('.tool-checkbox input:checked').forEach(cb => {
+                tools.push(cb.value);
+            });
+            
+            // Tarama başlat
+            try {
+                document.getElementById('startScanBtn').disabled = true;
+                document.getElementById('startScanBtn').textContent = 'Başlatılıyor...';
+                
+                const response = await fetch('/api/v1/scans/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        target_url: targetUrl,
+                        scan_type: scanType,
+                        tools: tools.length > 0 ? tools : null
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Tarama başlatılamadı');
+                }
+                
+                const data = await response.json();
+                scanId = data.scan_id;
+                
+                // Sonuç panelini göster
+                document.getElementById('scanResult').classList.add('active');
+                
+                // Durumu izlemeye başla
+                startPolling();
+                
+            } catch (error) {
+                alert('Hata: ' + error.message);
+                document.getElementById('startScanBtn').disabled = false;
+                document.getElementById('startScanBtn').textContent = '🚀 Taramayı Başlat';
+            }
+        });
+        
+        // Tarama durumunu izle
+        function startPolling() {
+            pollInterval = setInterval(checkScanStatus, 2000);
+        }
+        
+        async function checkScanStatus() {
+            if (!scanId) return;
+            
+            try {
+                const response = await fetch(`/api/v1/scans/${scanId}`);
+                const data = await response.json();
+                
+                // Durumu güncelle
+                updateStatus(data);
+                
+                // Tamamlandıysa sonuçları göster
+                if (data.status === 'completed') {
+                    clearInterval(pollInterval);
+                    await loadResults();
+                } else if (data.status === 'failed') {
+                    clearInterval(pollInterval);
+                    alert('Tarama başarısız oldu: ' + data.error_message);
+                }
+                
+            } catch (error) {
+                console.error('Durum kontrolü hatası:', error);
+            }
+        }
+        
+        function updateStatus(data) {
+            const badge = document.getElementById('statusBadge');
+            const progress = document.getElementById('progressBar');
+            const currentTool = document.getElementById('currentTool');
+            
+            // Durum badge'i
+            badge.className = 'status-badge status-' + data.status;
+            const statusTexts = {
+                'pending': '⏳ Bekliyor',
+                'running': '🔄 Çalışıyor',
+                'completed': '✅ Tamamlandı',
+                'failed': '❌ Başarısız'
+            };
+            badge.textContent = statusTexts[data.status] || data.status;
+            
+            // İlerleme çubuğu
+            progress.style.width = data.progress + '%';
+            progress.textContent = data.progress + '%';
+            
+            // Mevcut araç
+            if (data.current_tool) {
+                currentTool.textContent = `Çalışan araç: ${data.current_tool}`;
+            }
+        }
+        
+        async function loadResults() {
+            try {
+                const response = await fetch(`/api/v1/reports/${scanId}/detailed`);
+                const data = await response.json();
+                
+                // Sonuçları göster
+                document.getElementById('statusSection').style.display = 'none';
+                document.getElementById('resultsSection').style.display = 'block';
+                
+                // Özet istatistikleri
+                displaySummary(data.summary.findings_by_risk);
+                
+                // Bulguları listele
+                displayFindings(data.findings);
+                
+                // Rapor butonu - Detaylı rapor sayfasına yönlendir
+                document.getElementById('viewReportBtn').onclick = () => {
+                    window.location.href = `/report/${scanId}`;
+                };
+                
+                // Formu yeniden aktif et
+                document.getElementById('startScanBtn').disabled = false;
+                document.getElementById('startScanBtn').textContent = '🚀 Taramayı Başlat';
+                
+            } catch (error) {
+                console.error('Sonuçları yükleme hatası:', error);
+            }
+        }
+        
+        function displaySummary(findingsByRisk) {
+            const container = document.getElementById('findingsSummary');
+            const riskLevels = {
+                'critical': { label: 'Kritik', class: 'critical' },
+                'high': { label: 'Yüksek', class: 'high' },
+                'medium': { label: 'Orta', class: 'medium' },
+                'low': { label: 'Düşük', class: 'low' },
+                'info': { label: 'Bilgi', class: 'info' }
+            };
+            
+            container.innerHTML = '';
+            findingsByRisk.forEach(item => {
+                const config = riskLevels[item.risk_level];
+                container.innerHTML += `
+                    <div class="finding-box finding-${config.class}">
+                        <div class="count">${item.count}</div>
+                        <div class="label">${config.label}</div>
+                    </div>
+                `;
+            });
+        }
+        
+        function displayFindings(findings) {
+            const container = document.getElementById('findingsList');
+            container.innerHTML = '';
+            
+            if (findings.length === 0) {
+                container.innerHTML = '<p style="text-align: center; color: #666;">Güvenlik açığı bulunamadı.</p>';
+                return;
+            }
+            
+            findings.forEach(finding => {
+                container.innerHTML += `
+                    <div class="finding-item ${finding.risk_level}">
+                        <h4>${finding.title}</h4>
+                        <p><strong>Araç:</strong> ${finding.tool_name}</p>
+                        <p>${finding.description}</p>
+                        <p><strong>Öneri:</strong> ${finding.recommendation}</p>
+                    </div>
+                `;
+            });
+        }
+    </script>
+</body>
+</html>

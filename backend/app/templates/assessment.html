@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ app_name }} - Security Assessment Platform</title>
+    <style>
+        :root {
+            --primary: #1e293b;           /* Dark slate */
+            --primary-dark: #0f172a;      /* Darker */
+            --accent: #475569;            /* Medium slate */
+            --success: #10b981;           /* Dark green */
+            --warning: #f59e0b;           /* Dark amber */
+            --critical: #dc2626;          /* Dark red */
+            --info: #0ea5e9;              /* Dark blue */
+            --surface: #f8fafc;           /* Very light */
+            --border: #cbd5e1;            /* Light gray */
+            --text: #1e293b;              /* Dark text */
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        header {
+            background: var(--primary-dark);
+            border-bottom: 1px solid var(--border);
+            padding: 1.5rem 2rem;
+            color: white;
+        }
+        
+        header h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+        
+        header p {
+            opacity: 0.9;
+            font-size: 0.9rem;
+        }
+        
+        main {
+            flex: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 2rem;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            max-width: 900px;
+            width: 100%;
+            padding: 2rem;
+        }
+        
+        .assessment-section h2 {
+            color: var(--primary);
+            font-size: 1.8rem;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+        }
+        
+        .assessment-section p {
+            color: #64748b;
+            margin-bottom: 1.5rem;
+        }
+        
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+        
+        .form-group label {
+            display: block;
+            font-weight: 500;
+            margin-bottom: 0.5rem;
+            color: var(--primary);
+        }
+        
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 1rem;
+            transition: border-color 0.2s;
+        }
+        
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(30, 41, 59, 0.1);
+        }
+        
+        .assessment-form {
+            display: grid;
+            gap: 1rem;
+        }
+        
+        .form-actions {
+            display: flex;
+            gap: 1rem;
+        }
+        
+        button {
+            padding: 0.75rem 2rem;
+            border: none;
+            border-radius: 4px;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+            flex: 1;
+        }
+        
+        .btn-primary:hover {
+            background: var(--primary-dark);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+        }
+        
+        /* Status Section */
+        .status-section {
+            display: none;
+        }
+        
+        .phases {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 1rem;
+            margin: 1.5rem 0;
+        }
+        
+        .phase {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 1rem;
+            text-align: center;
+        }
+        
+        .phase.active {
+            border-color: var(--primary);
+            background: rgba(30, 41, 59, 0.05);
+        }
+        
+        .phase.complete {
+            border-color: var(--success);
+        }
+        
+        .phase-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--border);
+            margin: 0.5rem auto;
+        }
+        
+        .phase.active .phase-indicator {
+            background: var(--primary);
+            animation: pulse 2s infinite;
+        }
+        
+        .phase.complete .phase-indicator {
+            background: var(--success);
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        /* Findings */
+        .findings {
+            margin-top: 2rem;
+        }
+        
+        .finding-card {
+            background: var(--surface);
+            border-left: 4px solid var(--border);
+            border-radius: 4px;
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+        }
+        
+        .finding-card.critical {
+            border-left-color: var(--critical);
+        }
+        
+        .finding-card.high {
+            border-left-color: var(--warning);
+        }
+        
+        .finding-card.medium {
+            border-left-color: var(--info);
+        }
+        
+        .finding-card.low {
+            border-left-color: var(--success);
+        }
+        
+        .finding-card h4 {
+            color: var(--primary);
+            margin-bottom: 0.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .risk-badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 3px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .risk-critical {
+            background: var(--critical);
+            color: white;
+        }
+        
+        .risk-high {
+            background: var(--warning);
+            color: white;
+        }
+        
+        .risk-medium {
+            background: var(--info);
+            color: white;
+        }
+        
+        .risk-low {
+            background: var(--success);
+            color: white;
+        }
+        
+        .confidence-badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 3px;
+            font-size: 0.8rem;
+            background: rgba(100, 116, 139, 0.1);
+            color: var(--accent);
+            margin-left: 0.5rem;
+        }
+        
+        .verification-note {
+            background: #fef3c7;
+            border-left: 3px solid var(--warning);
+            padding: 0.75rem;
+            margin: 0.5rem 0;
+            border-radius: 2px;
+            font-size: 0.9rem;
+            color: #92400e;
+        }
+        
+        .finding-card p {
+            color: #64748b;
+            margin: 0.5rem 0;
+            line-height: 1.5;
+        }
+        
+        .finding-card code {
+            background: #f1f5f9;
+            padding: 0.25rem 0.5rem;
+            border-radius: 2px;
+            font-family: 'Monaco', 'Courier New', monospace;
+            font-size: 0.85rem;
+        }
+        
+        details {
+            margin-top: 1rem;
+        }
+        
+        details > summary {
+            cursor: pointer;
+            color: var(--primary);
+            font-weight: 500;
+            padding: 0.5rem;
+            user-select: none;
+        }
+        
+        details > summary:hover {
+            background: var(--surface);
+        }
+        
+        pre {
+            background: #f1f5f9;
+            padding: 1rem;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-size: 0.85rem;
+            margin-top: 0.5rem;
+            line-height: 1.4;
+        }
+        
+        /* Disclaimer */
+        .disclaimer {
+            background: #f0f9ff;
+            border-left: 4px solid var(--info);
+            padding: 1rem;
+            border-radius: 4px;
+            margin-top: 2rem;
+            font-size: 0.9rem;
+            color: #0c4a6e;
+        }
+        
+        .disclaimer h3 {
+            margin-bottom: 0.5rem;
+        }
+        
+        footer {
+            background: var(--primary-dark);
+            color: white;
+            padding: 1.5rem 2rem;
+            text-align: center;
+            font-size: 0.9rem;
+            opacity: 0.8;
+            border-top: 1px solid var(--border);
+        }
+        
+        @media (max-width: 768px) {
+            .container {
+                padding: 1.5rem;
+            }
+            
+            .phases {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>{{ app_name }}</h1>
+        <p>Professional Web Application Security Assessment Platform</p>
+    </header>
+
+    <main>
+        <div class="container">
+            <div class="assessment-section">
+                <h2>Security Assessment</h2>
+                <p>Comprehensive vulnerability detection and risk analysis</p>
+
+                <form class="assessment-form" id="assessmentForm">
+                    <div class="form-group">
+                        <label for="targetUrl">Target URL</label>
+                        <input type="url" id="targetUrl" placeholder="https://example.com" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="assessmentScope">Assessment Scope</label>
+                        <select id="assessmentScope">
+                            <option value="quick">Quick Scan - Asset Discovery (5 min)</option>
+                            <option value="standard">Standard - Comprehensive Testing (30 min)</option>
+                            <option value="deep">Deep - Exhaustive Analysis (2 hours)</option>
+                        </select>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="submit" class="btn-primary">Start Assessment</button>
+                    </div>
+                </form>
+            </div>
+
+            <div class="status-section" id="statusSection">
+                <h2>Assessment Progress</h2>
+                
+                <div class="phases" id="phasesContainer">
+                    <div class="phase" data-phase="discovery">
+                        <span class="phase-name">Asset Discovery</span>
+                        <div class="phase-indicator"></div>
+                    </div>
+                    <div class="phase" data-phase="fingerprinting">
+                        <span class="phase-name">Fingerprinting</span>
+                        <div class="phase-indicator"></div>
+                    </div>
+                    <div class="phase" data-phase="waf">
+                        <span class="phase-name">WAF Analysis</span>
+                        <div class="phase-indicator"></div>
+                    </div>
+                    <div class="phase" data-phase="assessment">
+                        <span class="phase-name">Vulnerability Assessment</span>
+                        <div class="phase-indicator"></div>
+                    </div>
+                    <div class="phase" data-phase="validation">
+                        <span class="phase-name">Validation</span>
+                        <div class="phase-indicator"></div>
+                    </div>
+                </div>
+
+                <div class="findings" id="findingsContainer"></div>
+                
+                <div class="disclaimer">
+                    <h3>⚠️ Important Notice</h3>
+                    <p><strong>Assessment Method:</strong> This report contains results from automated vulnerability detection tools.</p>
+                    <ul>
+                        <li>Results may include findings that require manual verification</li>
+                        <li>Automated findings do not replace professional security testing</li>
+                        <li>Critical findings must be validated by security professionals</li>
+                        <li>Detection confidence scores are provided for each finding</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <footer>
+        <p>{{ app_name }} v{{ version }} - Professional Security Assessment Platform</p>
+    </footer>
+
+    <script>
+        const API_BASE = '/api/v1';
+        let currentScanId = null;
+
+        document.getElementById('assessmentForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const targetUrl = document.getElementById('targetUrl').value;
+            const scope = document.getElementById('assessmentScope').value;
+
+            try {
+                const response = await fetch(`${API_BASE}/scans/`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        target_url: targetUrl,
+                        scan_type: scope,
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Assessment failed');
+                }
+
+                const data = await response.json();
+                currentScanId = data.scan_id;
+                
+                // Show status section
+                document.querySelector('.assessment-section').style.display = 'none';
+                document.getElementById('statusSection').style.display = 'block';
+                
+                // Start polling for updates
+                pollScanStatus(data.scan_id);
+            } catch (error) {
+                console.error('Assessment error:', error);
+                alert('Assessment failed: ' + error.message);
+            }
+        });
+
+        async function pollScanStatus(scanId) {
+            const pollInterval = setInterval(async () => {
+                try {
+                    const response = await fetch(`${API_BASE}/scans/${scanId}`);
+                    const data = await response.json();
+                    
+                    // Update phases
+                    updatePhaseUI(data.progress);
+                    
+                    // If complete, show results
+                    if (data.status === 'completed') {
+                        clearInterval(pollInterval);
+                        displayFindings(data);
+                    } else if (data.status === 'failed') {
+                        clearInterval(pollInterval);
+                        alert('Assessment failed: ' + (data.error_message || 'Unknown error'));
+                    }
+                } catch (error) {
+                    console.error('Status poll error:', error);
+                    clearInterval(pollInterval);
+                }
+            }, 2000);
+        }
+
+        function updatePhaseUI(progress) {
+            const phases = document.querySelectorAll('.phase');
+            const phasePercentages = [0, 20, 40, 60, 80];
+            
+            phases.forEach((phase, index) => {
+                const phaseProgress = phasePercentages[index];
+                
+                if (progress > phaseProgress + 15) {
+                    phase.classList.add('complete');
+                    phase.classList.remove('active');
+                } else if (progress > phaseProgress) {
+                    phase.classList.add('active');
+                } else {
+                    phase.classList.remove('active', 'complete');
+                }
+            });
+        }
+
+        function displayFindings(data) {
+            const container = document.getElementById('findingsContainer');
+            
+            if (!data.findings || data.findings.length === 0) {
+                container.innerHTML = '<p style="text-align: center; color: var(--success);">✓ No vulnerabilities detected</p>';
+                return;
+            }
+            
+            container.innerHTML = '';
+            
+            data.findings.forEach((finding, index) => {
+                const card = document.createElement('div');
+                card.className = `finding-card ${finding.risk_level}`;
+                
+                const confidencePercent = Math.round((finding.confidence_score || 1.0) * 100);
+                const confidenceBadge = finding.confidence_score < 0.8 
+                    ? `<span class="confidence-badge">${confidencePercent}% Confidence</span>`
+                    : '';
+                
+                const verificationNote = finding.requires_manual_verification
+                    ? `<p class="verification-note">⚠️ Manual verification recommended</p>`
+                    : '';
+                
+                const sources = (finding.sources || []).join(', ') || finding.tool_name || 'unknown';
+                
+                card.innerHTML = `
+                    <h4>
+                        ${index + 1}. ${finding.title}
+                        <span class="risk-badge risk-${finding.risk_level}">
+                            ${finding.risk_level.toUpperCase()}
+                        </span>
+                        ${confidenceBadge}
+                    </h4>
+                    <p><strong>Affected URL:</strong> <code>${finding.affected_url}</code></p>
+                    <p>${finding.description}</p>
+                    ${verificationNote}
+                    <p><strong>Detected by:</strong> ${sources}</p>
+                    <details>
+                        <summary>Detection Method & Evidence</summary>
+                        <p><strong>Method:</strong> ${finding.detection_method || 'automated'}</p>
+                        <pre>${JSON.stringify(finding.evidence, null, 2)}</pre>
+                    </details>
+                    <details>
+                        <summary>Remediation</summary>
+                        <p>${finding.recommendation || 'Follow security best practices'}</p>
+                    </details>
+                `;
+                
+                container.appendChild(card);
+            });
+        }
+    </script>
+</body>
+</html>

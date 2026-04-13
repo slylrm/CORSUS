@@ -91,3 +91,4 @@ Thumbs.db
 *.bak
 *.swp
 .venv/
+!backend/app/templates/*.html

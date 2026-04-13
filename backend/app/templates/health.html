@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistem Sağlığı - WeppenTest</title>
+    <link rel="icon" href="/favicon.ico" />
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1a1f3a 50%, #16213e 100%);
+            color: #e2e8f0;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: 
+                radial-gradient(circle at 20% 50%, rgba(16, 185, 129, 0.05) 0%, transparent 50%),
+                radial-gradient(circle at 80% 80%, rgba(14, 165, 233, 0.05) 0%, transparent 50%);
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        .container {
+            position: relative;
+            z-index: 2;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+
+        nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 0;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+            margin-bottom: 40px;
+        }
+
+        .logo {
+            font-size: 1.5em;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #10b981;
+            text-decoration: none;
+        }
+
+        .logo-icon {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, #10b981, #14b8a6);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            color: white;
+            font-size: 18px;
+        }
+
+        nav a {
+            color: #cbd5e1;
+            text-decoration: none;
+            margin: 0 24px;
+            font-size: 0.95em;
+            transition: color 0.3s ease;
+        }
+
+        nav a:hover {
+            color: #10b981;
+        }
+
+        .nav-buttons {
+            display: flex;
+            gap: 12px;
+        }
+
+        .btn-nav {
+            padding: 10px 20px;
+            border: 1px solid #10b981;
+            background: transparent;
+            color: #10b981;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            font-size: 0.9em;
+            text-decoration: none;
+        }
+
+        .btn-nav.primary {
+            background: #10b981;
+            color: white;
+            border-color: #10b981;
+        }
+
+        .btn-nav:hover {
+            background: #10b981;
+            color: white;
+            box-shadow: 0 0 20px rgba(16, 185, 129, 0.3);
+        }
+
+        .page-title {
+            text-align: center;
+            margin-bottom: 50px;
+        }
+
+        .page-title h1 {
+            font-size: 2.8em;
+            font-weight: 700;
+            margin-bottom: 8px;
+            background: linear-gradient(135deg, #fff 0%, #cbd5e1 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .page-title p {
+            font-size: 1.1em;
+            color: #94a3b8;
+        }
+
+        .status-hero {
+            background: linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(14, 165, 233, 0.15));
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            border-radius: 16px;
+            padding: 40px;
+            text-align: center;
+            margin-bottom: 50px;
+            backdrop-filter: blur(10px);
+        }
+
+        .status-indicator {
+            font-size: 3.5em;
+            margin-bottom: 16px;
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+
+        .status-hero h2 {
+            font-size: 2em;
+            color: #f1f5f9;
+            margin-bottom: 8px;
+        }
+
+        .status-hero p {
+            color: #cbd5e1;
+            font-size: 1em;
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 24px;
+            margin-bottom: 50px;
+        }
+
+        .info-card {
+            background: linear-gradient(135deg, rgba(30, 41, 59, 0.8), rgba(15, 23, 42, 0.8));
+            border: 1px solid rgba(14, 165, 233, 0.2);
+            border-radius: 12px;
+            padding: 24px;
+            backdrop-filter: blur(10px);
+            transition: all 0.3s ease;
+        }
+
+        .info-card:hover {
+            border-color: rgba(16, 185, 129, 0.5);
+            transform: translateY(-4px);
+            box-shadow: 0 8px 24px rgba(16, 185, 129, 0.1);
+        }
+
+        .info-card h3 {
+            font-size: 0.9em;
+            color: #94a3b8;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+
+        .info-card p {
+            font-size: 1.4em;
+            color: #10b981;
+            font-weight: 700;
+        }
+
+        .metrics-section {
+            background: linear-gradient(135deg, rgba(30, 41, 59, 0.8), rgba(15, 23, 42, 0.8));
+            border: 1px solid rgba(14, 165, 233, 0.2);
+            border-radius: 16px;
+            padding: 40px;
+            backdrop-filter: blur(10px);
+            margin-bottom: 50px;
+        }
+
+        .metrics-section h3 {
+            font-size: 1.5em;
+            color: #f1f5f9;
+            margin-bottom: 24px;
+            font-weight: 600;
+        }
+
+        .metric-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 0;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+        }
+
+        .metric-row:last-child {
+            border-bottom: none;
+        }
+
+        .metric-label {
+            color: #cbd5e1;
+            font-weight: 500;
+        }
+
+        .metric-value {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #10b981;
+            font-weight: 700;
+            font-size: 1.1em;
+        }
+
+        .status-indicator-dot {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            background: #10b981;
+            border-radius: 50%;
+            animation: pulse-dot 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .back-button {
+            display: inline-block;
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #10b981, #14b8a6);
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.2);
+            margin-bottom: 50px;
+        }
+
+        .back-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(16, 185, 129, 0.3);
+        }
+
+        footer {
+            border-top: 1px solid rgba(148, 163, 184, 0.1);
+            padding: 30px 0;
+            text-align: center;
+            color: #64748b;
+            font-size: 0.9em;
+            margin-bottom: 30px;
+        }
+
+        footer a {
+            color: #10b981;
+            text-decoration: none;
+        }
+
+        footer a:hover {
+            text-decoration: underline;
+        }
+
+        @media (max-width: 768px) {
+            nav {
+                flex-direction: column;
+                gap: 20px;
+            }
+
+            nav a {
+                margin: 0 12px;
+            }
+
+            .nav-buttons {
+                width: 100%;
+                justify-content: center;
+            }
+
+            .page-title h1 {
+                font-size: 2em;
+            }
+
+            .info-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .metric-row {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 8px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Navigation -->
+        <nav>
+            <a href="/" class="logo">
+                <span class="logo-icon">W</span>
+                WeppenTest
+            </a>
+            <div style="flex: 1; display: flex; justify-content: center; gap: 32px;">
+                <a href="/scan">Tarama</a>
+                <a href="/docs">Dokümantasyon</a>
+                <a href="/">Ana Sayfa</a>
+            </div>
+            <div class="nav-buttons">
+                <a href="/scan" class="btn-nav primary">Tarama Başlat</a>
+            </div>
+        </nav>
+
+        <!-- Back Button -->
+        <a href="/" class="back-button">← Ana Sayfaya Dön</a>
+
+        <!-- Page Title -->
+        <div class="page-title">
+            <h1>❤️ Sistem Sağlığı</h1>
+            <p>WeppenTest Platform durumu ve bileşenleri</p>
+        </div>
+
+        <!-- Status Hero -->
+        <div class="status-hero">
+            <div class="status-indicator">✅</div>
+            <h2>Sistem Sağlıklı</h2>
+            <p>Tüm hizmetler normal çalışıyor</p>
+        </div>
+
+        <!-- Info Cards -->
+        <div class="info-grid">
+            <div class="info-card">
+                <h3>📦 Uygulama Adı</h3>
+                <p>{{ app_name }}</p>
+            </div>
+
+            <div class="info-card">
+                <h3>🏷️ Versiyon</h3>
+                <p>{{ version }}</p>
+            </div>
+
+            <div class="info-card">
+                <h3>⏱️ Çalışma Süresi</h3>
+                <p id="uptime">Hesaplanıyor...</p>
+            </div>
+
+            <div class="info-card">
+                <h3>🌐 API Durumu</h3>
+                <p>
+                    <span class="status-indicator-dot"></span> Aktif
+                </p>
+            </div>
+
+            <div class="info-card">
+                <h3>📊 Veritabanı</h3>
+                <p>
+                    <span class="status-indicator-dot"></span> Bağlı
+                </p>
+            </div>
+
+            <div class="info-card">
+                <h3>🔧 Tarama Motoru</h3>
+                <p>
+                    <span class="status-indicator-dot"></span> Hazır
+                </p>
+            </div>
+        </div>
+
+        <!-- Metrics Section -->
+        <div class="metrics-section">
+            <h3>📊 Sistem Metrikleri</h3>
+
+            <div class="metric-row">
+                <span class="metric-label">API Durumu</span>
+                <span class="metric-value">
+                    <span class="status-indicator-dot"></span>
+                    Çalışıyor
+                </span>
+            </div>
+
+            <div class="metric-row">
+                <span class="metric-label">Veritabanı Bağlantısı</span>
+                <span class="metric-value">
+                    <span class="status-indicator-dot"></span>
+                    Bağlı
+                </span>
+            </div>
+
+            <div class="metric-row">
+                <span class="metric-label">Tarama Motoru Durumu</span>
+                <span class="metric-value">
+                    <span class="status-indicator-dot"></span>
+                    Hazır
+                </span>
+            </div>
+
+            <div class="metric-row">
+                <span class="metric-label">Son Kontrol Zamanı</span>
+                <span class="metric-value" id="timestamp">{{ timestamp }}</span>
+            </div>
+
+            <div class="metric-row">
+                <span class="metric-label">Şu Anki Saat</span>
+                <span class="metric-value" id="current-time">--:--:--</span>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <footer>
+            <p>© 2026 WeppenTest Platform | <a href="/">Ana Sayfa</a> | <a href="/scan">Tarama Başlat</a></p>
+        </footer>
+    </div>
+
+    <script>
+        // Update current time
+        function updateTime() {
+            const now = new Date();
+            document.getElementById('current-time').textContent = now.toLocaleTimeString('tr-TR');
+        }
+
+        // Calculate uptime
+        const startTime = Math.floor(Date.now() / 1000);
+        function updateUptime() {
+            const now = Math.floor(Date.now() / 1000);
+            const uptime = now - startTime;
+            const hours = Math.floor(uptime / 3600);
+            const minutes = Math.floor((uptime % 3600) / 60);
+            const seconds = uptime % 60;
+            document.getElementById('uptime').textContent = `${hours}s ${minutes}d ${seconds}s`;
+        }
+
+        updateTime();
+        updateUptime();
+        setInterval(updateTime, 1000);
+        setInterval(updateUptime, 1000);
+    </script>
+</body>
+</html>
