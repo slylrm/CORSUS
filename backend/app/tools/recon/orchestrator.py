@@ -29,6 +29,10 @@ class ScanConfig:
     retries: int = 1
     dns_timeout: float = 3.0
     dns_retries: int = 1
+    directory_max_paths: int = 6000
+    directory_max_variants_per_seed: int = 4
+    directory_early_stop_streak: int = 220
+    directory_min_early_stop_samples: int = 260
 
 
 class ProgressTracker:
@@ -69,6 +73,10 @@ class WebSecurityScanner:
             timeout=config.timeout,
             retries=config.retries,
             delay=config.request_delay,
+            max_paths=config.directory_max_paths,
+            max_variants_per_seed=config.directory_max_variants_per_seed,
+            early_stop_streak=config.directory_early_stop_streak,
+            min_early_stop_samples=config.directory_min_early_stop_samples,
         )
         self.fingerprinter = TechnologyFingerprinter(timeout=config.timeout)
 
@@ -80,7 +88,13 @@ class WebSecurityScanner:
         tracker.update("fuzz", 0.0, "Dizin taramasi basliyor")
         tracker.update("fingerprint", 0.0, "Teknoloji tespiti basliyor")
 
-        connector = aiohttp.TCPConnector(limit=self.config.max_concurrency * 2, ttl_dns_cache=300, ssl=False)
+        connector_limit = max(8, min(self.config.max_concurrency * 2, 64))
+        connector = aiohttp.TCPConnector(
+            limit=connector_limit,
+            limit_per_host=max(4, min(self.config.max_concurrency, 32)),
+            ttl_dns_cache=300,
+            ssl=False,
+        )
         timeout = aiohttp.ClientTimeout(total=None, connect=self.config.timeout, sock_read=self.config.timeout)
         errors: list[str] = []
 

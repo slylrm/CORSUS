@@ -97,7 +97,8 @@
         }
         
         .form-group input,
-        .form-group select {
+        .form-group select,
+        .form-group textarea {
             width: 100%;
             padding: 10px 12px;
             border: 1px solid var(--border);
@@ -107,10 +108,30 @@
         }
         
         .form-group input:focus,
-        .form-group select:focus {
+        .form-group select:focus,
+        .form-group textarea:focus {
             outline: none;
             border-color: var(--info);
             box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.1);
+        }
+
+        .auth-box {
+            background: #f0f9ff;
+            border: 1px solid #bae6fd;
+            border-radius: 6px;
+            padding: 12px;
+            font-size: 0.9em;
+        }
+
+        .auth-box label {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            cursor: pointer;
+        }
+
+        .auth-box input[type="checkbox"] {
+            margin-top: 2px;
         }
         
         .button-group {
@@ -344,6 +365,35 @@
                         <option value="deep">Derinlemesine (2-4 saat)</option>
                     </select>
                 </div>
+
+                <div class="form-group">
+                    <label for="scopeStatement">Kapsam Bildirimi *</label>
+                    <textarea
+                        id="scopeStatement"
+                        name="scopeStatement"
+                        rows="3"
+                        minlength="10"
+                        placeholder="Örn: example.com alan adındaki kamuya açık web uygulamasını değerlendirin. /admin ve /payment uç noktalarını hariç tutun."
+                        required
+                    ></textarea>
+                </div>
+
+                <div class="form-group">
+                    <label for="verificationToken">Domain Doğrulama Token'ı (opsiyonel)</label>
+                    <input
+                        type="text"
+                        id="verificationToken"
+                        name="verificationToken"
+                        placeholder="weppentest-verify-..."
+                    >
+                </div>
+
+                <div class="form-group auth-box">
+                    <label>
+                        <input type="checkbox" id="authorizationAcknowledged" required>
+                        Bu hedefi değerlendirmek için yetkili olduğumu onaylıyorum.
+                    </label>
+                </div>
                 
                 <div class="button-group">
                     <button type="submit" class="btn-primary" id="submitBtn">
@@ -403,11 +453,32 @@
             'LOW': 'DÜŞÜK'
         };
         
+        const authCheckbox = document.getElementById('authorizationAcknowledged');
+        const scopeField = document.getElementById('scopeStatement');
+        const verificationTokenField = document.getElementById('verificationToken');
+        const assessmentTypeField = document.getElementById('assessmentType');
+
+        function updateButtonState() {
+            const isAuthorized = authCheckbox.checked;
+            const scopeValid = scopeField.value.trim().length >= 10;
+            const urlValid = document.getElementById('targetUrl').value.trim().length > 0;
+            const typeSelected = assessmentTypeField.value.trim().length > 0;
+            submitBtn.disabled = !(isAuthorized && scopeValid && urlValid && typeSelected);
+        }
+
+        authCheckbox.addEventListener('change', updateButtonState);
+        scopeField.addEventListener('input', updateButtonState);
+        document.getElementById('targetUrl').addEventListener('input', updateButtonState);
+        assessmentTypeField.addEventListener('change', updateButtonState);
+        updateButtonState();
+
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
             
             const targetUrl = document.getElementById('targetUrl').value;
             const assessmentType = document.getElementById('assessmentType').value;
+            const scopeStatement = scopeField.value.trim();
+            const verificationToken = verificationTokenField.value.trim();
             
             try {
                 errorDiv.classList.remove('show');
@@ -420,8 +491,9 @@
                     body: JSON.stringify({
                         target_url: targetUrl,
                         scan_type: assessmentType,
-                        authorization_acknowledged: true,
-                        scope_statement: 'Security assessment of web application'
+                        domain_verification_token: verificationToken || null,
+                        authorization_acknowledged: authCheckbox.checked,
+                        scope_statement: scopeStatement
                     })
                 });
                 
@@ -496,30 +568,58 @@
             });
         }
         
+        function normalizeRiskLevel(value) {
+            const allowed = ['critical', 'high', 'medium', 'low', 'info'];
+            const normalized = String(value || '').toLowerCase();
+            return allowed.includes(normalized) ? normalized : 'info';
+        }
+
         function displayFindings(scan) {
-            findingsList.innerHTML = '';
+            findingsList.textContent = '';
             
             scan.findings.forEach(finding => {
-                const riskLevel = riskTranslations[finding.risk_level] || finding.risk_level;
-                const riskBadgeClass = `badge-${finding.risk_level.toLowerCase()}`;
+                const normalizedRisk = normalizeRiskLevel(finding.risk_level);
+                const riskKey = String(finding.risk_level || '').toUpperCase();
+                const riskLevel = riskTranslations[riskKey] || riskKey || 'INFO';
+                const riskBadgeClass = `badge-${normalizedRisk}`;
                 const verified = finding.verification_status === 'verified' ? 'Doğrulandı' : 'Manuel Doğrulama Gerekli';
-                
-                const html = `
-                    <div class="finding">
-                        <div class="finding-header">
-                            <div class="finding-title">${finding.title}</div>
-                            <span class="badge ${riskBadgeClass}">${riskLevel}</span>
-                        </div>
-                        <div class="confidence">
-                            Güven: %${(finding.confidence_score * 100).toFixed(0)} | 
-                            ${finding.sources.join(', ')}
-                        </div>
-                        <div class="verification-warning">
-                            Durum: ${verified}
-                        </div>
-                    </div>
-                `;
-                findingsList.innerHTML += html;
+
+                const card = document.createElement('div');
+                card.className = 'finding';
+
+                const header = document.createElement('div');
+                header.className = 'finding-header';
+
+                const title = document.createElement('div');
+                title.className = 'finding-title';
+                title.textContent = finding.title || 'Bilinmeyen bulgu';
+
+                const badge = document.createElement('span');
+                badge.className = `badge ${riskBadgeClass}`;
+                badge.textContent = riskLevel;
+
+                header.appendChild(title);
+                header.appendChild(badge);
+
+                const confidence = document.createElement('div');
+                confidence.className = 'confidence';
+                const confidenceValue = Number.isFinite(finding.confidence_score)
+                    ? Math.round(finding.confidence_score * 100)
+                    : 0;
+                const sourceText = Array.isArray(finding.sources)
+                    ? finding.sources.join(', ')
+                    : '';
+                confidence.textContent = `Güven: %${confidenceValue} | ${sourceText}`;
+
+                const verification = document.createElement('div');
+                verification.className = 'verification-warning';
+                verification.textContent = `Durum: ${verified}`;
+
+                card.appendChild(header);
+                card.appendChild(confidence);
+                card.appendChild(verification);
+
+                findingsList.appendChild(card);
             });
         }
     </script>

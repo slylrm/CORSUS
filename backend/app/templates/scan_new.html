@@ -455,29 +455,57 @@
             });
         }
         
+        function normalizeRiskLevel(value) {
+            const allowed = ['critical', 'high', 'medium', 'low', 'info'];
+            const normalized = String(value || '').toLowerCase();
+            return allowed.includes(normalized) ? normalized : 'info';
+        }
+
         function displayFindings(scan) {
-            findingsList.innerHTML = '';
+            findingsList.textContent = '';
             
             scan.findings.forEach(finding => {
-                const riskBadgeClass = `badge-${finding.risk_level.toLowerCase()}`;
-                const verified = finding.verification_status === 'verified' ? 'Verified' : 'Needs Manual Verification';
-                
-                const html = `
-                    <div class="finding">
-                        <div class="finding-header">
-                            <div class="finding-title">${finding.title}</div>
-                            <span class="badge ${riskBadgeClass}">${finding.risk_level}</span>
-                        </div>
-                        <div class="confidence">
-                            Confidence: ${(finding.confidence_score * 100).toFixed(0)}% | 
-                            ${finding.sources.join(', ')}
-                        </div>
-                        <div class="verification-warning">
-                            Status: ${verified}
-                        </div>
-                    </div>
-                `;
-                findingsList.innerHTML += html;
+                const normalizedRisk = normalizeRiskLevel(finding.risk_level);
+                const riskBadgeClass = `badge-${normalizedRisk}`;
+                const verified = finding.verification_status === 'verified'
+                    ? 'Verified'
+                    : 'Needs Manual Verification';
+
+                const card = document.createElement('div');
+                card.className = 'finding';
+
+                const header = document.createElement('div');
+                header.className = 'finding-header';
+
+                const title = document.createElement('div');
+                title.className = 'finding-title';
+                title.textContent = finding.title || 'Untitled Finding';
+
+                const badge = document.createElement('span');
+                badge.className = `badge ${riskBadgeClass}`;
+                badge.textContent = String(finding.risk_level || '').toUpperCase();
+
+                header.appendChild(title);
+                header.appendChild(badge);
+
+                const confidence = document.createElement('div');
+                confidence.className = 'confidence';
+                const confidenceValue = Number.isFinite(finding.confidence_score)
+                    ? Math.round(finding.confidence_score * 100)
+                    : 0;
+                const sources = Array.isArray(finding.sources)
+                    ? finding.sources.join(', ')
+                    : '';
+                confidence.textContent = `Confidence: ${confidenceValue}% | ${sources}`;
+
+                const verification = document.createElement('div');
+                verification.className = 'verification-warning';
+                verification.textContent = `Status: ${verified}`;
+
+                card.appendChild(header);
+                card.appendChild(confidence);
+                card.appendChild(verification);
+                findingsList.appendChild(card);
             });
         }
     </script>

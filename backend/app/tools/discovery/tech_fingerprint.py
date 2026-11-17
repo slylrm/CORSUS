@@ -4,6 +4,7 @@ Collects headers, TLS hints (when HTTPS), cookies and favicon hash.
 """
 
 import hashlib
+import asyncio
 import ssl
 import socket
 import json
@@ -36,15 +37,41 @@ class TechFingerprintWrapper(BaseToolWrapper):
     async def run(self, target: str, options: Optional[Dict[str, Any]] = None) -> ToolResult:
         opts = options or {}
         start_ts = datetime.now()
-        timeout = int(opts.get("timeout", 20))
+        timeout = float(opts.get("timeout", 8))
+        connect_timeout = float(opts.get("connect_timeout", max(5.0, min(timeout, 10.0))))
+        connect_retries = max(0, int(opts.get("connect_retries", 1)))
 
         findings: List[Dict[str, Any]] = []
         errors: List[str] = []
         metadata: Dict[str, Any] = {}
 
         try:
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-                resp = await client.get(target)
+            client_timeout = httpx.Timeout(timeout, connect=connect_timeout)
+            async with httpx.AsyncClient(
+                timeout=client_timeout,
+                follow_redirects=True,
+                verify=settings.HTTP_VERIFY_TLS,
+            ) as client:
+                async def _get_with_retries(url: str) -> httpx.Response:
+                    total_attempts = connect_retries + 1
+                    for attempt in range(total_attempts):
+                        try:
+                            return await client.get(url)
+                        except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError) as exc:
+                            if attempt >= total_attempts - 1:
+                                raise
+                            self.logger.info(
+                                "Fingerprint transient request error for {} (attempt {}/{}): {}",
+                                url,
+                                attempt + 1,
+                                total_attempts,
+                                exc.__class__.__name__,
+                            )
+                            await asyncio.sleep(min(0.5 * (attempt + 1), 1.5))
+
+                    raise RuntimeError("Fingerprint request failed")
+
+                resp = await _get_with_retries(target)
                 headers = {k.lower(): v for k, v in resp.headers.items()}
                 metadata["headers"] = headers
                 server = headers.get("server")
@@ -86,7 +113,8 @@ class TechFingerprintWrapper(BaseToolWrapper):
                             "confidence_score": 0.65,
                         })
                 except Exception as exc:  # noqa: BLE001
-                    errors.append(str(exc))
+                    soft_error = str(exc).strip() or exc.__class__.__name__
+                    metadata.setdefault("soft_errors", []).append(f"favicon: {soft_error}")
                 # TLS info if HTTPS
                 parsed = urlparse(target)
                 if parsed.scheme == "https":
@@ -109,9 +137,15 @@ class TechFingerprintWrapper(BaseToolWrapper):
                                         "confidence_score": 0.9,
                                     })
                     except Exception as exc:  # noqa: BLE001
-                        errors.append(str(exc))
+                        soft_error = str(exc).strip() or exc.__class__.__name__
+                        metadata.setdefault("soft_errors", []).append(f"tls: {soft_error}")
+        except (httpx.TimeoutException, httpx.RequestError) as exc:
+            error_name = str(exc).strip() or exc.__class__.__name__
+            metadata["request_error"] = error_name
+            metadata["degraded"] = True
+            self.logger.info("Fingerprint request failed (non-fatal): {}", error_name)
         except Exception as exc:  # noqa: BLE001
-            errors.append(str(exc))
+            errors.append(str(exc).strip() or exc.__class__.__name__)
             self.logger.error("Fingerprint error", exc_info=True)
 
         duration = (datetime.now() - start_ts).total_seconds()

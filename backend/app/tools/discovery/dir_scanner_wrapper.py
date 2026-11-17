@@ -7,6 +7,7 @@ import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from pathlib import Path
 
 from app.tools.base import (
     BaseToolWrapper,
@@ -74,7 +75,12 @@ class DirScannerWrapper(BaseToolWrapper):
         )
 
     def _build_command(self, target: str, opts: Dict[str, Any]) -> List[str]:
-        wordlist = opts.get("wordlist") or self.config.get("wordlist") or "/usr/share/wordlists/dirb/common.txt"
+        default_wordlist = Path(__file__).resolve().parents[4] / "wordlists" / "common.txt"
+        if not default_wordlist.exists():
+            fallback_wordlist = Path(__file__).resolve().parents[4] / "wordlists" / "common_medium.txt"
+            if fallback_wordlist.exists():
+                default_wordlist = fallback_wordlist
+        wordlist = opts.get("wordlist") or self.config.get("wordlist") or str(default_wordlist)
         threads = str(opts.get("threads", 10))
         follow_redirect = opts.get("follow_redirects", False)
         insecure_tls = opts.get("insecure", False)

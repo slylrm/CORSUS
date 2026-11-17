@@ -8,6 +8,7 @@ Bu örnek, yeni tool'ların nasıl oluşturulacağını göstermektedir
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 import requests
+from app.config import settings
 from urllib.parse import urlparse
 
 from app.tools.base import (
@@ -124,7 +125,7 @@ class HeaderScannerWrapper(BaseToolWrapper):
             response = requests.head(
                 target,
                 timeout=10,
-                verify=False,
+                verify=settings.HTTP_VERIFY_TLS,
                 allow_redirects=True
             )
             return dict(response.headers)

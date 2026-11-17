@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import re
 import requests
 from app.utils.logger import logger
+from app.config import settings
 import time
 
 
@@ -98,7 +99,7 @@ class WAFDetector:
     def __init__(self):
         self.logger = logger.bind(component="WAFDetector")
         self.session = requests.Session()
-        self.session.verify = False
+        self.session.verify = settings.HTTP_VERIFY_TLS
     
     def detect_all_protections(self, target_url: str) -> Dict[str, Any]:
         """Tüm koruma katmanlarını tespit et"""

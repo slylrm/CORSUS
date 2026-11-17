@@ -2,6 +2,8 @@
 
 AI-free, deterministic web application security testing platform.
 
+GitHub repository: [github.com/slylrm/corsus](https://github.com/slylrm/corsus)
+
 ## Quick Start
 
 Preferred Python: `3.12`
@@ -31,6 +33,16 @@ Optional dependency groups:
 .\start.ps1
 ```
 
+### Docker (optional)
+
+```powershell
+docker compose up --build -d app
+# Include the isolated OWASP ZAP service:
+docker compose --profile scanners up --build -d
+```
+
+The Docker app binds to `127.0.0.1:8000`; native Windows setup remains supported. See [Docker setup](docs/DOCKER_SETUP.md) and the [Security Tools Arsenal](docs/SECURITY_TOOLS.md). The central local inventory is available at `/api/v1/tools/arsenal`.
+
 Backend URLs:
 - Dashboard: `http://127.0.0.1:8000/`
 - API docs: `http://127.0.0.1:8000/docs`
@@ -45,8 +57,7 @@ Backend URLs:
 ### Tests
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest backend\tests\test_scanner_refactoring.py -q
-.\.venv\Scripts\python.exe -m pytest backend\tests\test_e2e.py -q
+.\.venv\Scripts\python.exe -m pytest backend\tests -q
 ```
 
 ## Dependency Layout
@@ -85,11 +96,22 @@ DATABASE_URL=sqlite+aiosqlite:///./weppentest.db
 - a comma-separated list
 - a JSON array
 
+## Documentation
+
+- [Documentation index](docs/README.md)
+- [Project cleanup and retained items](docs/PROJECT_CLEANUP.md)
+- [Security Tools Arsenal](docs/SECURITY_TOOLS.md)
+- [Tool arguments and manager](docs/TOOL_ARGUMENTS.md)
+- [Docker setup](docs/DOCKER_SETUP.md)
+- [LLM security module](docs/LLM_SECURITY.md)
+- [Browser automation](docs/BROWSER_AUTOMATION.md)
+- [Project overview](PROJECT_OVERVIEW.md)
+- [Security audit](SECURITY_AUDIT.md)
+- [Historical web pentest tools handbook](<Kapsamlı Web Pentest Araçları Dokümantasyonu.md>)
+
 ## Frontend
 
-The standalone frontend in `frontend/index.html` now works in both modes:
-- served by the backend on the same origin
-- served separately on ports `5173`, `3000`, or `5500`, while calling the backend on `127.0.0.1:8000`
+The application UI is served from `backend/app/templates` with assets from `backend/app/static`. `frontend/index.html` remains an optional standalone development page; when served separately on ports `5173`, `3000`, or `5500`, it calls the backend at `127.0.0.1:8000`.
 
 ## Troubleshooting
 
@@ -112,3 +134,7 @@ winget install -e --id Python.Python.3.12
 winget install -e --id Rustlang.Rustup
 rustup default stable
 ```
+
+### Nikto on Windows
+
+Nikto source execution requires Perl. Set `NIKTO_PATH`, `NIKTO_GIT_SOURCE`, and `PERL_PATH` in your local, ignored `.env` as needed. The registry also checks supported bundled and sibling source locations. Do not add local secrets or machine-specific paths to Git.

@@ -121,7 +121,16 @@ class ZapScannerWrapper(BaseToolWrapper):
             {**params, "contextName": context_name, "regex": include_regex},
         )
         ctx = self._get_json(f"{host}/JSON/context/view/context/", {**params, "contextName": context_name})
-        return str(ctx.get("context", [{}])[0].get("id", "0"))
+        context_payload = ctx.get("context")
+        if isinstance(context_payload, list) and context_payload:
+            first = context_payload[0]
+            if isinstance(first, dict):
+                return str(first.get("id", "0"))
+        if isinstance(context_payload, dict):
+            return str(context_payload.get("id", "0"))
+        if isinstance(context_payload, str):
+            return context_payload
+        return "0"
 
     def _import_urls(self, host: str, urls: List[str], params: Dict[str, Any]):
         for url in urls:

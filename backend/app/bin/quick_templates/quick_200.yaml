@@ -1,0 +1,14 @@
+id: quick-http-200
+info:
+  name: Quick HTTP 200
+  author: weppentest
+  severity: info
+  description: Quick template that checks whether root returns HTTP 200
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/"
+    matchers:
+      - type: status
+        status:
+          - 200

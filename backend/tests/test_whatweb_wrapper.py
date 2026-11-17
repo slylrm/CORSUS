@@ -38,7 +38,10 @@ class TestWhatWebWrapper:
         command = self.wrapper._build_command(self.target, {})
         
         assert "whatweb" in command[0]
-        assert "--log=json=/tmp/whatweb_output.json" in command
+        log_arg = next((c for c in command if c.startswith("--log=json=")), None)
+        assert log_arg is not None
+        log_path = Path(log_arg.split("=", 2)[-1])
+        assert log_path.suffix == ".json"
         assert "--timeout" in command
         assert self.target in command
         print("✓ Basic command build test passed")

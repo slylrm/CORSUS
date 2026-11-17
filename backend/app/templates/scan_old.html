@@ -485,6 +485,12 @@
             }
         }
         
+        function normalizeRiskLevel(value) {
+            const allowed = ['critical', 'high', 'medium', 'low', 'info'];
+            const normalized = String(value || '').toLowerCase();
+            return allowed.includes(normalized) ? normalized : 'info';
+        }
+
         function displaySummary(findingsByRisk) {
             const container = document.getElementById('findingsSummary');
             const riskLevels = {
@@ -495,36 +501,70 @@
                 'info': { label: 'Bilgi', class: 'info' }
             };
             
-            container.innerHTML = '';
+            container.textContent = '';
             findingsByRisk.forEach(item => {
                 const config = riskLevels[item.risk_level];
-                container.innerHTML += `
-                    <div class="finding-box finding-${config.class}">
-                        <div class="count">${item.count}</div>
-                        <div class="label">${config.label}</div>
-                    </div>
-                `;
+                if (!config) {
+                    return;
+                }
+                const box = document.createElement('div');
+                box.className = `finding-box finding-${config.class}`;
+
+                const count = document.createElement('div');
+                count.className = 'count';
+                count.textContent = String(item.count ?? 0);
+
+                const label = document.createElement('div');
+                label.className = 'label';
+                label.textContent = config.label;
+
+                box.appendChild(count);
+                box.appendChild(label);
+                container.appendChild(box);
             });
         }
         
         function displayFindings(findings) {
             const container = document.getElementById('findingsList');
-            container.innerHTML = '';
+            container.textContent = '';
             
-            if (findings.length === 0) {
-                container.innerHTML = '<p style="text-align: center; color: #666;">Güvenlik açığı bulunamadı.</p>';
+            if (!findings || findings.length === 0) {
+                const empty = document.createElement('p');
+                empty.style.textAlign = 'center';
+                empty.style.color = '#666';
+                empty.textContent = 'Güvenlik açığı bulunamadı.';
+                container.appendChild(empty);
                 return;
             }
             
             findings.forEach(finding => {
-                container.innerHTML += `
-                    <div class="finding-item ${finding.risk_level}">
-                        <h4>${finding.title}</h4>
-                        <p><strong>Araç:</strong> ${finding.tool_name}</p>
-                        <p>${finding.description}</p>
-                        <p><strong>Öneri:</strong> ${finding.recommendation}</p>
-                    </div>
-                `;
+                const riskLevel = normalizeRiskLevel(finding.risk_level);
+                const card = document.createElement('div');
+                card.className = `finding-item ${riskLevel}`;
+
+                const title = document.createElement('h4');
+                title.textContent = finding.title || 'Bilinmeyen bulgu';
+
+                const toolRow = document.createElement('p');
+                const toolLabel = document.createElement('strong');
+                toolLabel.textContent = 'Araç:';
+                toolRow.appendChild(toolLabel);
+                toolRow.appendChild(document.createTextNode(` ${finding.tool_name || '-'}`));
+
+                const description = document.createElement('p');
+                description.textContent = finding.description || '';
+
+                const recommendation = document.createElement('p');
+                const recLabel = document.createElement('strong');
+                recLabel.textContent = 'Öneri:';
+                recommendation.appendChild(recLabel);
+                recommendation.appendChild(document.createTextNode(` ${finding.recommendation || ''}`));
+
+                card.appendChild(title);
+                card.appendChild(toolRow);
+                card.appendChild(description);
+                card.appendChild(recommendation);
+                container.appendChild(card);
             });
         }
     </script>

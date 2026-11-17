@@ -126,7 +126,7 @@ class ContextAnalyzer:
             return ExposureLevel.AUTH_REQUIRED
         
         # Check evidence for auth signals
-        if evidence:
+        if isinstance(evidence, dict):
             headers = str(evidence.get("headers", "")).lower()
             if "www-authenticate" in headers or "authorization" in headers:
                 notes.append("Auth headers present")
@@ -135,6 +135,11 @@ class ContextAnalyzer:
             status = evidence.get("status_code", 0)
             if status in [401, 403]:
                 notes.append("Auth required (401/403)")
+                return ExposureLevel.AUTH_REQUIRED
+        elif isinstance(evidence, str):
+            # Fallback for string evidence
+            if any(h in evidence.lower() for h in ["www-authenticate", "authorization"]):
+                notes.append("Auth signals in evidence string")
                 return ExposureLevel.AUTH_REQUIRED
         
         # Default: public
@@ -178,15 +183,16 @@ class ContextAnalyzer:
         """Detect if there's an authentication barrier"""
         
         # Direct evidence
-        status = evidence.get("status_code", 0)
-        if status in [401, 403]:
-            notes.append("Auth barrier confirmed (HTTP 401/403)")
-            return True
+        if isinstance(evidence, dict):
+            status = evidence.get("status_code", 0)
+            if status in [401, 403]:
+                notes.append("Auth barrier confirmed (HTTP 401/403)")
+                return True
         
         # Related findings check (cross-reference)
         if related_findings:
             for f in related_findings:
-                if hasattr(f, 'evidence'):
+                if hasattr(f, 'evidence') and isinstance(f.evidence, dict):
                     if f.evidence.get("status_code") in [401, 403]:
                         notes.append("Auth barrier detected in related finding")
                         return True

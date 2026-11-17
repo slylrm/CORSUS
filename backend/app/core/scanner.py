@@ -32,6 +32,11 @@ from app.core.intelligence.scan_thinking_engine import (
     ScanThinkingEngine,
 )
 from app.core.intelligence.operating_mode import OperatingMode
+from app.core.persistence import (
+    append_tool_execution,
+    persist_scan_findings,
+    upsert_scan_state,
+)
 
 
 class ScanStatus(str, Enum):
@@ -40,6 +45,7 @@ class ScanStatus(str, Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class VerificationStatus(str, Enum):
@@ -159,6 +165,7 @@ class Scan:
     """Tarama işlemini temsil eder"""
     def __init__(self, target_url: str, scan_type: str, tools: List[str] = None,
                  authorization_acknowledged: bool = False, scope_statement: Optional[str] = None,
+                 owner_id: Optional[str] = None,
                  operating_mode: OperatingMode = OperatingMode.SAFE_READ_ONLY):
         self.scan_id = str(uuid.uuid4())
         self.target_url = target_url
@@ -192,8 +199,14 @@ class Scan:
         self.escalated: bool = False
         self.authorization_acknowledged: bool = authorization_acknowledged
         self.scope_statement: Optional[str] = scope_statement
+        self.owner_id: Optional[str] = owner_id
         self.operating_mode: OperatingMode = operating_mode
         self.target_key: str = target_url.lower()
+        self.waf_detected: bool = False
+        self.waf_vendor: Optional[str] = None
+        self.waf_confidence_score: float = 0.0
+        self.rate_limit_detected: bool = False
+        self.bot_protection_detected: bool = False
 
     def to_dict(self):
         return {
@@ -240,12 +253,14 @@ class ToolRunner:
         self.timeout = timeout
         self.logger = logger.bind(component="ToolRunner")
         self.operating_mode = operating_mode
+        self.last_result_by_tool: Dict[str, ToolResult] = {}
     
     async def run_tool(
         self,
         tool_class: Type[BaseToolWrapper],
         target: str,
-        options: Optional[Dict] = None
+        options: Optional[Dict] = None,
+        config: Optional[Dict] = None,
     ) -> Tuple[bool, List[Finding], Optional[str]]:
         """
         Tool wrapper'ı çalıştır ve sonuçları işle
@@ -260,12 +275,26 @@ class ToolRunner:
         """
         tool_name = tool_class.name if hasattr(tool_class, 'name') else tool_class.__name__
         findings = []
+        effective_timeout = self._resolve_execution_timeout(options, config)
+        self.last_result_by_tool.pop(tool_name, None)
         
         try:
-            self.logger.info(f"[TOOL RUNNER] Starting {tool_name} with timeout={self.timeout}s")
+            self.logger.info(f"[TOOL RUNNER] Starting {tool_name} with timeout={effective_timeout}s")
             
             # Tool instance oluştur
-            tool_instance = tool_class()
+            tool_instance = tool_class(config=config)
+            # If the tool wrapper marked itself unavailable (binary missing), bail early
+            if hasattr(tool_instance, "_available") and not getattr(tool_instance, "_available"):
+                unavailable_reason = getattr(tool_instance, "_available_reason", None)
+                error_msg = str(unavailable_reason or f"{tool_name} is not installed")
+                self.logger.warning(f"[TOOL RUNNER] {tool_name} {error_msg}")
+                self.last_result_by_tool[tool_name] = self._build_error_tool_result(
+                    tool_name=tool_name,
+                    target=target,
+                    category=getattr(getattr(tool_class, "category", None), "value", str(getattr(tool_class, "category", "custom"))),
+                    errors=[error_msg],
+                )
+                return False, [], error_msg
             if hasattr(tool_instance, "set_operating_mode"):
                 try:
                     tool_instance.set_operating_mode(self.operating_mode)
@@ -276,11 +305,19 @@ class ToolRunner:
             # Timeout aşılırsa exception fırlatılır, tool durdurulur
             result = await asyncio.wait_for(
                 self._execute_tool_async(tool_instance, target, options),
-                timeout=self.timeout
+                timeout=effective_timeout
             )
             
             # Sonuçları Finding'e dönüştür
             findings = self._convert_to_findings(result)
+            self.last_result_by_tool[tool_name] = result
+
+            if not result.success:
+                error_msg = "; ".join(result.errors or []) or f"{tool_name} reported an unsuccessful execution"
+                self.logger.warning(
+                    f"[TOOL RUNNER] {tool_name} reported failure - Findings: {len(findings)} - Errors: {result.errors or []}"
+                )
+                return False, findings, error_msg
             
             self.logger.info(
                 f"[TOOL RUNNER] {tool_name} completed - Findings: {len(findings)}"
@@ -290,20 +327,81 @@ class ToolRunner:
             
         except asyncio.TimeoutError:
             # ✅ TIMEOUT: Tool takıldı, scan devam etmeli
-            error_msg = f"TIMEOUT after {self.timeout}s"
+            error_msg = f"TIMEOUT after {effective_timeout}s"
             self.logger.error(f"[TOOL RUNNER] {tool_name} {error_msg}")
+            self.last_result_by_tool[tool_name] = self._build_error_tool_result(
+                tool_name=tool_name,
+                target=target,
+                category=getattr(getattr(tool_class, "category", None), "value", str(getattr(tool_class, "category", "custom"))),
+                errors=[error_msg],
+                metadata={"timeout_seconds": effective_timeout},
+            )
             return False, [], error_msg
             
         except OperatingModeViolation as e:
             error_msg = f"OPERATING_MODE_VIOLATION: {str(e)}"
             self.logger.error(f"[TOOL RUNNER] {tool_name} {error_msg}")
+            self.last_result_by_tool[tool_name] = self._build_error_tool_result(
+                tool_name=tool_name,
+                target=target,
+                category=getattr(getattr(tool_class, "category", None), "value", str(getattr(tool_class, "category", "custom"))),
+                errors=[error_msg],
+                metadata={"operating_mode": self.operating_mode.value},
+            )
             return False, [], error_msg
 
         except Exception as e:
             # ✅ EXCEPTION: Tool hata verdi, scan devam etmeli
             error_msg = f"Exception: {str(e)}"
             self.logger.error(f"[TOOL RUNNER] {tool_name} {error_msg}", exc_info=True)
+            self.last_result_by_tool[tool_name] = self._build_error_tool_result(
+                tool_name=tool_name,
+                target=target,
+                category=getattr(getattr(tool_class, "category", None), "value", str(getattr(tool_class, "category", "custom"))),
+                errors=[error_msg],
+            )
             return False, [], error_msg
+
+    def _build_error_tool_result(
+        self,
+        *,
+        tool_name: str,
+        target: str,
+        category: str,
+        errors: List[str],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> ToolResult:
+        return ToolResult(
+            tool_name=tool_name,
+            category=category,
+            target=target,
+            timestamp=datetime.now(),
+            duration=0.0,
+            success=False,
+            findings=[],
+            raw_output="",
+            errors=errors,
+            metadata=metadata or {},
+            exit_code=-1,
+            stdout="",
+            stderr="; ".join(errors),
+        )
+
+    def _resolve_execution_timeout(
+        self,
+        options: Optional[Dict[str, Any]],
+        config: Optional[Dict[str, Any]],
+    ) -> int:
+        for source in (options or {}, config or {}):
+            value = source.get("tool_timeout")
+            if value is None:
+                continue
+            try:
+                # Enforce a sane minimum timeout to avoid 1s timeouts seen in logs
+                return max(5, int(value))
+            except (TypeError, ValueError):
+                self.logger.warning("Invalid tool_timeout override ignored: {}", value)
+        return self.timeout
     
     async def _execute_tool_async(
         self,
@@ -385,7 +483,7 @@ class ToolRunner:
         findings = []
         
         if not tool_result.success:
-            self.logger.warning(
+            self.logger.info(
                 f"Tool {tool_result.tool_name} was not successful. "
                 f"Errors: {tool_result.errors}"
             )
@@ -447,7 +545,7 @@ class ScannerEngine:
     - Progress tracking
     """
     
-    def __init__(self, tool_timeout: int = 300, operating_mode: OperatingMode = OperatingMode.SAFE_READ_ONLY):
+    def __init__(self, tool_timeout: int = 300, operating_mode: OperatingMode = OperatingMode.SAFE_READ_ONLY, concurrency: int = 4):
         """
         Initialize ScannerEngine
         
@@ -461,6 +559,15 @@ class ScannerEngine:
         self.context_analyzer = ContextAnalyzer()
         self.thinking_engine = PentesterThinkingEngine()
         self.scan_thinking_engine = ScanThinkingEngine()
+        # Concurrency limit for running tools within the same phase
+        self.concurrency: int = max(1, int(concurrency))
+        # Per-scan asyncio locks to protect scan state when running tools concurrently
+        self._scan_locks: Dict[str, asyncio.Lock] = {}
+
+    def _get_scan_lock(self, scan_id: str) -> asyncio.Lock:
+        if scan_id not in self._scan_locks:
+            self._scan_locks[scan_id] = asyncio.Lock()
+        return self._scan_locks[scan_id]
 
     def _surface_key(self, finding: Finding) -> str:
         parsed = urlparse(finding.affected_url)
@@ -595,11 +702,39 @@ class ScannerEngine:
         parsed = urlparse(target_url)
         return (parsed.hostname or target_url).lower()
 
-    def _has_active_scan_for_target(self, target_key: str) -> bool:
+    def _find_active_scan_for_target(self, target_key: str) -> Optional[Scan]:
         for s in self.active_scans.values():
             if getattr(s, "target_key", "") == target_key and s.status in {ScanStatus.PENDING, ScanStatus.RUNNING}:
-                return True
+                return s
+        return None
+
+    def _is_stale_active_scan(self, scan: Scan) -> bool:
+        now = datetime.now()
+
+        # Pending scans should transition to RUNNING quickly; if not, background start likely failed.
+        if scan.status == ScanStatus.PENDING:
+            return (now - scan.created_at).total_seconds() > 120
+
+        # Running scans can legitimately take long, so keep a generous stale threshold.
+        if scan.status == ScanStatus.RUNNING and scan.started_at:
+            return (now - scan.started_at).total_seconds() > 6 * 60 * 60
+
         return False
+
+    def _expire_stale_scan(self, scan: Scan, reason: str) -> None:
+        scan.status = ScanStatus.FAILED
+        scan.error_message = reason
+        scan.completed_at = datetime.now()
+        self._persist_scan_state(scan)
+        self.logger.warning(
+            "[SCAN STALE CLEANUP] Expired stale scan {} for target {}: {}",
+            scan.scan_id,
+            scan.target_url,
+            reason,
+        )
+
+    def _has_active_scan_for_target(self, target_key: str) -> bool:
+        return self._find_active_scan_for_target(target_key) is not None
 
     def create_scan(
         self,
@@ -608,6 +743,7 @@ class ScannerEngine:
         tools: List[str] = None,
         authorization_acknowledged: bool = False,
         scope_statement: Optional[str] = None,
+        owner_id: Optional[str] = None,
     ) -> Scan:
         """
         Yeni bir tarama oluştur
@@ -623,8 +759,18 @@ class ScannerEngine:
             Scan object
         """
         target_key = self._normalize_target(target_url)
-        if self._has_active_scan_for_target(target_key):
-            raise ValueError("Only one active assessment per target is allowed at a time")
+        existing_active = self._find_active_scan_for_target(target_key)
+        if existing_active:
+            if self._is_stale_active_scan(existing_active):
+                stale_reason = "Stale active assessment was automatically closed"
+                self._expire_stale_scan(existing_active, stale_reason)
+            else:
+                raise ValueError(
+                    "Only one active assessment per target is allowed at a time "
+                    f"(active_scan_id={existing_active.scan_id}, "
+                    f"status={existing_active.status.value}, "
+                    f"progress={existing_active.progress})"
+                )
 
         scan = Scan(
             target_url,
@@ -632,10 +778,12 @@ class ScannerEngine:
             tools,
             authorization_acknowledged=authorization_acknowledged,
             scope_statement=scope_statement,
+            owner_id=owner_id,
             operating_mode=self.operating_mode,
         )
         scan.target_key = target_key
         self.active_scans[scan.scan_id] = scan
+        self._persist_scan_state(scan)
         self.logger.info(f"Created scan {scan.scan_id} for {target_url}")
         return scan
     
@@ -646,7 +794,7 @@ class ScannerEngine:
     async def run_scan(
         self,
         scan_id: str,
-        tool_classes: Dict[str, Type[BaseToolWrapper]]
+        tool_classes: Dict[str, Any]
     ):
         """
         Taramayı çalıştır - Sırayla tool'ları çalıştır
@@ -660,88 +808,193 @@ class ScannerEngine:
         if not scan:
             self.logger.error(f"Scan {scan_id} not found")
             return
-        
+
         scan_completed_successfully = False
         total_tools = len(scan.tools) if scan.tools else 0
-        tool_phase_map = {
-            "crawler": "recon",
-            "dir_brute": "recon",
-            "fingerprint": "fingerprint",
-            "basic": "recon",
-            "headers": "recon",
-            "ssl": "transport",
-            "ports": "network",
-        }
-        
+
         try:
             scan.status = ScanStatus.RUNNING
             scan.started_at = datetime.now()
+            scan.current_phase = "initializing"
+            scan.current_tool = None
+            self._persist_scan_state(scan)
             self.logger.info(f"[SCAN START] {scan_id} for {scan.target_url} with {len(scan.tools)} tools")
-            
-            # Tool'ları sırayla çalıştır
+            # Tools will be executed per-phase. Tools in the same phase run concurrently
+            # to speed up scanning while preserving cross-phase ordering.
+            tool_phase_map = {
+                "crawler": "recon",
+                "dir_brute": "recon",
+                "fingerprint": "fingerprint",
+                "basic": "recon",
+                "headers": "recon",
+                "ssl": "transport",
+                "ports": "network",
+            }
+            phase_order = [
+                "recon",
+                "fingerprint",
+                "transport",
+                "network",
+                "execution",
+            ]
+
+            # Group tools by phase using original tool order
+            tools_by_phase: Dict[str, List[Tuple[int, str]]] = {p: [] for p in phase_order}
+            tools_by_phase.setdefault("execution", [])
             for idx, tool_name in enumerate(scan.tools):
-                if scan.status != ScanStatus.RUNNING:
-                    self.logger.info(f"[SCAN STOPPED] {scan_id} was stopped by user")
-                    break
-                
-                # Progress güncelle
-                scan.current_tool = tool_name
-                scan.current_phase = tool_phase_map.get(tool_name, "execution")
-                scan.progress = int((scan.tools_completed / total_tools) * 100) if total_tools else 0
-                
-                self.logger.info(
-                    f"[TOOL START] {tool_name} ({idx + 1}/{len(scan.tools)}) - Progress: {scan.progress}%"
-                )
-                
+                phase = tool_phase_map.get(tool_name, "execution")
+                if phase not in tools_by_phase:
+                    tools_by_phase[phase] = []
+                tools_by_phase[phase].append((idx, tool_name))
+
+            async def _run_tool_task(tool_name: str, idx: int):
+                # helper to run a single tool and persist results under a lock
+                lock = self._get_scan_lock(scan.scan_id)
+
                 # Tool sınıfını bul
-                tool_class = tool_classes.get(tool_name)
-                if not tool_class:
+                tool_entry = tool_classes.get(tool_name)
+                if not tool_entry:
                     error_msg = f"Tool class not found: {tool_name}"
+                    async with lock:
+                        scan.tool_errors[tool_name] = error_msg
+                        scan.tools_completed += 1
+                        scan.progress = int((scan.tools_completed / total_tools) * 100) if total_tools else 100
                     self.logger.error(f"[TOOL ERROR] {tool_name} - {error_msg}")
-                    scan.tool_errors[tool_name] = error_msg
-                    scan.tools_completed += 1
-                    continue
-                
-                # Tool'u çalıştır
+                    append_tool_execution(
+                        scan_id=scan.scan_id,
+                        tool_name=tool_name,
+                        target=scan.target_url,
+                        status="missing_tool",
+                        exit_code=-1,
+                        execution_time_seconds=0.0,
+                        stdout="",
+                        stderr=error_msg,
+                        findings_count=0,
+                        error_message=error_msg,
+                    )
+                    self._persist_scan_state(scan)
+                    return
+
+                if isinstance(tool_entry, dict):
+                    tool_class = tool_entry.get("tool_class")
+                    tool_target = tool_entry.get("target", scan.target_url)
+                    tool_options = tool_entry.get("options", {"scan_type": scan.scan_type})
+                    tool_config = tool_entry.get("config")
+                else:
+                    tool_class = tool_entry
+                    tool_target = scan.target_url
+                    tool_options = {"scan_type": scan.scan_type}
+                    tool_config = None
+
+                async with lock:
+                    scan.current_tool = tool_name
+                self._persist_scan_state(scan)
+
+                self.logger.info(f"[TOOL START] {tool_name} ({idx + 1}/{len(scan.tools)})")
+
                 try:
                     success, findings, error = await self.tool_runner.run_tool(
                         tool_class,
-                        target=scan.target_url,
-                        options={"scan_type": scan.scan_type}
+                        target=tool_target,
+                        options=tool_options,
+                        config=tool_config,
                     )
-                    
-                    # Sonuçları kaydet
-                    scan.tools_completed += 1
-                    
-                    if success:
-                        evaluated_findings = self._process_with_thinking_engine(scan, findings)
-                        scan.findings.extend(evaluated_findings)
-                        self.logger.info(
-                            f"[TOOL END] {tool_name} - SUCCESS - Processed {len(evaluated_findings)} findings"
-                        )
-                    else:
-                        if error:
-                            scan.tool_errors[tool_name] = error
-                            if "OPERATING_MODE_VIOLATION" in error:
-                                scan.status = ScanStatus.COMPLETED
-                                scan.error_message = error
-                                self.logger.error("Operating mode violation triggered STOP_SCAN", extra={"tool": tool_name, "error": error})
-                                break
-                        self.logger.warning(f"[TOOL FAIL] {tool_name} - {error}")
-                        
+                    raw_result = self.tool_runner.last_result_by_tool.get(tool_name)
+
+                    async with lock:
+                        scan.tools_completed += 1
+                        scan.progress = int((scan.tools_completed / total_tools) * 100) if total_tools else 100
+
+                        if raw_result:
+                            scan.tool_results[tool_name] = raw_result
+
+                        if success:
+                            evaluated_findings = self._process_with_thinking_engine(scan, findings)
+                            scan.findings.extend(evaluated_findings)
+                            tool_status = "success"
+                            findings_count = len(evaluated_findings)
+                            self.logger.info(
+                                f"[TOOL END] {tool_name} - SUCCESS - Processed {len(evaluated_findings)} findings"
+                            )
+                        else:
+                            if error:
+                                scan.tool_errors[tool_name] = error
+                            tool_status = "failed"
+                            findings_count = len(findings)
+                            self.logger.warning(f"[TOOL FAIL] {tool_name} - {error}")
+
+                        if scan.current_tool == tool_name:
+                            scan.current_tool = None
+
+                    append_tool_execution(
+                        scan_id=scan.scan_id,
+                        tool_name=tool_name,
+                        target=tool_target,
+                        status=tool_status,
+                        exit_code=raw_result.exit_code if raw_result and raw_result.exit_code is not None else (0 if success else -1),
+                        execution_time_seconds=float(raw_result.duration) if raw_result and raw_result.duration is not None else 0.0,
+                        stdout=raw_result.stdout if raw_result else "",
+                        stderr=raw_result.stderr if raw_result else (error or ""),
+                        findings_count=findings_count,
+                        error_message=error if not success else None,
+                    )
+                    self._persist_scan_state(scan)
+
                 except Exception as tool_exc:
-                    # Tool hatası scan'i durdurmamalı
-                    error_msg = f"Tool exception: {str(tool_exc)}"
-                    scan.tool_errors[tool_name] = error_msg
-                    scan.tools_completed += 1
-                    self.logger.error(f"[TOOL EXCEPTION] {tool_name} - {error_msg}", exc_info=True)
-                
-                # Tool sonrası ilerleme güncelle
+                    async with lock:
+                        scan.tool_errors[tool_name] = f"Tool exception: {str(tool_exc)}"
+                        scan.tools_completed += 1
+                        scan.progress = int((scan.tools_completed / total_tools) * 100) if total_tools else 100
+                        if scan.current_tool == tool_name:
+                            scan.current_tool = None
+                    self.logger.error(f"[TOOL EXCEPTION] {tool_name} - {str(tool_exc)}", exc_info=True)
+                    append_tool_execution(
+                        scan_id=scan.scan_id,
+                        tool_name=tool_name,
+                        target=tool_target,
+                        status="exception",
+                        exit_code=-1,
+                        execution_time_seconds=0.0,
+                        stdout="",
+                        stderr=str(tool_exc),
+                        findings_count=0,
+                        error_message=str(tool_exc),
+                    )
+                    self._persist_scan_state(scan)
+
+            # Iterate phases in order and run tools in each phase concurrently with a semaphore
+            for phase in phase_order:
+                phase_tools = tools_by_phase.get(phase) or []
+                if not phase_tools:
+                    continue
+
+                scan.current_phase = phase
+                scan.current_tool = None
+                self._persist_scan_state(scan)
+                self.logger.info(f"[PHASE START] {phase} - Running {len(phase_tools)} tools concurrently")
+
+                semaphore = asyncio.Semaphore(self.concurrency)
+
+                async def _bounded_run(tool_name: str, idx: int):
+                    async with semaphore:
+                        await _run_tool_task(tool_name, idx)
+
+                # Create tasks preserving original relative ordering for indices
+                tasks = [asyncio.create_task(_bounded_run(tn, idx)) for idx, tn in phase_tools]
+                # Wait for all tasks in this phase to finish
+                await asyncio.gather(*tasks)
+
+                # Update scan progress after phase
                 scan.progress = int((scan.tools_completed / total_tools) * 100) if total_tools else 100
-                scan.current_phase = None
+                self._persist_scan_state(scan)
 
                 # Diğer tool'lar için yer ver (asyncio event loop)
                 await asyncio.sleep(0.1)
+
+                # Thinking engine STOP_SCAN verdiyse sonraki phase'leri başlatma
+                if scan.status != ScanStatus.RUNNING:
+                    self.logger.info(f"[PHASE STOP] Scan stopped after phase '{phase}', skipping remaining phases.")
+                    break
             
             # Scan başarılı tamamlandı
             scan_completed_successfully = True
@@ -772,24 +1025,93 @@ class ScannerEngine:
                     scan.error_message = "Scan failed to complete normally"
             
             # Tamamlanma zamanını set et
-            scan.completed_at = datetime.now()
+            if scan.status in {ScanStatus.COMPLETED, ScanStatus.FAILED, ScanStatus.CANCELLED} and not scan.completed_at:
+                scan.completed_at = datetime.now()
+            scan.current_phase = None
+            scan.current_tool = None
+
+            if scan.status in {ScanStatus.COMPLETED, ScanStatus.FAILED, ScanStatus.CANCELLED}:
+                try:
+                    persist_scan_findings(
+                        scan_id=scan.scan_id,
+                        findings=[finding.to_dict() for finding in scan.findings],
+                    )
+                except Exception as persist_exc:
+                    self.logger.error(f"[SCAN PERSIST] Failed to persist findings for {scan.scan_id}: {persist_exc}")
+
+            self._persist_scan_state(scan)
             
             # Final durum log
+            started_at = scan.started_at or scan.created_at
             self.logger.info(
                 f"[SCAN FINALIZED] {scan_id} - "
                 f"Status: {scan.status.value}, "
-                f"Duration: {(scan.completed_at - scan.started_at).total_seconds():.1f}s, "
+                f"Duration: {(scan.completed_at - started_at).total_seconds():.1f}s, "
                 f"Findings: {len(scan.findings)}, "
                 f"Suppressed: {len(scan.suppressed_findings)}"
             )
     
-    def stop_scan(self, scan_id: str):
+    def stop_scan(self, scan_id: str) -> bool:
         """Taramayı durdur"""
         scan = self.get_scan(scan_id)
-        if scan and scan.status == ScanStatus.RUNNING:
-            scan.status = ScanStatus.FAILED
+        if not scan:
+            return False
+
+        if scan.status in {ScanStatus.RUNNING, ScanStatus.PENDING}:
+            scan.status = ScanStatus.CANCELLED
             scan.error_message = "Scan stopped by user"
+            scan.current_phase = None
+            scan.current_tool = None
+            scan.completed_at = datetime.now()
+            self._persist_scan_state(scan)
+            try:
+                persist_scan_findings(
+                    scan_id=scan.scan_id,
+                    findings=[finding.to_dict() for finding in scan.findings],
+                )
+            except Exception as persist_exc:
+                self.logger.error(f"Failed to persist findings while stopping scan {scan_id}: {persist_exc}")
             self.logger.info(f"Scan {scan_id} stopped")
+            return True
+
+        return False
+
+    def _persist_scan_state(self, scan: Scan) -> None:
+        try:
+            verified = sum(1 for f in scan.findings if f.verification_status == VerificationStatus.VERIFIED)
+            needs_review = sum(1 for f in scan.findings if f.verification_status == VerificationStatus.NEEDS_MANUAL)
+            upsert_scan_state(
+                scan,
+                extra={
+                    "scan_id": scan.scan_id,
+                    "target_url": scan.target_url,
+                    "scan_type": scan.scan_type,
+                    "status": scan.status.value,
+                    "progress": scan.progress,
+                    "current_phase": scan.current_phase,
+                    "current_tool": scan.current_tool,
+                    "tools": scan.tools,
+                    "findings_count": len(scan.findings),
+                    "findings_verified": verified,
+                    "findings_needs_review": needs_review,
+                    "correlated_risks": scan.correlated_risks,
+                    "report_summary": scan.report_summary,
+                    "authorization_acknowledged": scan.authorization_acknowledged,
+                    "scope_statement": scan.scope_statement,
+                    "owner_id": getattr(scan, "owner_id", None),
+                    "error_message": scan.error_message,
+                    "waf_detected": getattr(scan, "waf_detected", False),
+                    "waf_vendor": getattr(scan, "waf_vendor", None),
+                    "waf_confidence_score": getattr(scan, "waf_confidence_score", 0.0),
+                    "rate_limit_detected": getattr(scan, "rate_limit_detected", False),
+                    "bot_protection_detected": getattr(scan, "bot_protection_detected", False),
+                    "created_at": scan.created_at,
+                    "started_at": scan.started_at,
+                    "completed_at": scan.completed_at,
+                },
+            )
+        except Exception as e:
+            self.logger.error(f"Failed to persist scan state for {scan.scan_id}: {e}")
     
     def get_findings(self, scan_id: str) -> List[Finding]:
         """Scan'ın bulgularını getir"""

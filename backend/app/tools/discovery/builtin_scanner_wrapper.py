@@ -11,29 +11,20 @@ from typing import Dict, Any, List
 from urllib.parse import urlparse
 
 from app.tools.base import BaseToolWrapper, ToolResult, RiskLevel
+from app.config import settings
 from app.utils.logger import logger
 
 
 class BasicInfoWrapper(BaseToolWrapper):
     """Basic information gathering using HTTP requests"""
+    name = "basic"
+    description = "Gathers basic information about the target using HTTP requests"
     
     def __init__(self, config: Dict[str, Any] = None):
         """Initialize without dependency validation"""
         self.config = config or {}
         self.logger = logger.bind(tool="basic")
-    
-    @property
-    def name(self) -> str:
-        return "basic"
-    
-    @property
-    def display_name(self) -> str:
-        return "Basic Info Scanner"
-    
-    @property
-    def description(self) -> str:
-        return "Gathers basic information about the target using HTTP requests"
-    
+
     def parse_output(self, raw_output: str) -> List[Dict[str, Any]]:
         """Not used for async tools"""
         return []
@@ -42,13 +33,19 @@ class BasicInfoWrapper(BaseToolWrapper):
         """Run basic info scan"""
         from datetime import datetime
         start_time = datetime.now()
+        opts = config or {}
+        timeout = float(opts.get("timeout", 8))
         
         findings = []
         errors = []
         metadata = {}
         
         try:
-            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(timeout, connect=min(timeout, 3.0)),
+                follow_redirects=True,
+                verify=settings.HTTP_VERIFY_TLS,
+            ) as client:
                 try:
                     response = await client.get(target_url)
                     
@@ -63,10 +60,10 @@ class BasicInfoWrapper(BaseToolWrapper):
                             'description': f'Server header reveals: {server}',
                             'risk_level': RiskLevel.LOW,
                             'affected_url': target_url,
-                            'evidence': f'Server: {server}',
+                            'evidence': {'server_header': server},
                             'recommendation': 'Consider hiding server version information',
                             'cwe_id': 'CWE-200',
-                            'confidence_score': 90
+                            'confidence_score': 0.90
                         })
                     
                     # Powered-by headers
@@ -77,10 +74,10 @@ class BasicInfoWrapper(BaseToolWrapper):
                             'description': f'X-Powered-By header reveals: {powered_by}',
                             'risk_level': RiskLevel.LOW,
                             'affected_url': target_url,
-                            'evidence': f'X-Powered-By: {powered_by}',
+                            'evidence': {'x_powered_by': powered_by},
                             'recommendation': 'Remove X-Powered-By header',
                             'cwe_id': 'CWE-200',
-                            'confidence_score': 95
+                            'confidence_score': 0.95
                         })
                     
                     # Check for common technologies
@@ -91,13 +88,14 @@ class BasicInfoWrapper(BaseToolWrapper):
                             'description': 'Site appears to be running WordPress',
                             'risk_level': RiskLevel.INFO,
                             'affected_url': target_url,
-                            'evidence': 'WordPress keywords found in HTML',
+                            'evidence': {'match': 'wordpress'},
                             'recommendation': 'Ensure WordPress and plugins are up to date',
-                            'confidence_score': 80
+                            'confidence_score': 0.80
                         })
                     
                 except httpx.RequestError as e:
-                    errors.append(f"HTTP request failed: {str(e)}")
+                    detail = str(e).strip() or e.__class__.__name__
+                    errors.append(f"HTTP request failed: {detail}")
                     
         except Exception as e:
             errors.append(f"Scan failed: {str(e)}")
@@ -121,24 +119,14 @@ class BasicInfoWrapper(BaseToolWrapper):
 
 class SecurityHeadersWrapper(BaseToolWrapper):
     """Security headers scanner"""
+    name = "headers"
+    description = "Checks for missing or misconfigured security headers"
     
     def __init__(self, config: Dict[str, Any] = None):
         """Initialize without dependency validation"""
         self.config = config or {}
         self.logger = logger.bind(tool="headers")
-    
-    @property
-    def name(self) -> str:
-        return "headers"
-    
-    @property
-    def display_name(self) -> str:
-        return "Security Headers Scanner"
-    
-    @property
-    def description(self) -> str:
-        return "Checks for missing or misconfigured security headers"
-    
+
     def parse_output(self, raw_output: str) -> List[Dict[str, Any]]:
         """Not used for async tools"""
         return []
@@ -147,13 +135,19 @@ class SecurityHeadersWrapper(BaseToolWrapper):
         """Run security headers scan"""
         from datetime import datetime
         start_time = datetime.now()
+        opts = config or {}
+        timeout = float(opts.get("timeout", 8))
         
         findings = []
         errors = []
         metadata = {}
         
         try:
-            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(timeout, connect=min(timeout, 3.0)),
+                follow_redirects=True,
+                verify=settings.HTTP_VERIFY_TLS,
+            ) as client:
                 try:
                     response = await client.get(target_url)
                     headers = {k.lower(): v for k, v in response.headers.items()}
@@ -174,16 +168,17 @@ class SecurityHeadersWrapper(BaseToolWrapper):
                                 'description': f'The {header} header is not set',
                                 'risk_level': risk,
                                 'affected_url': target_url,
-                                'evidence': f'Missing header: {header}',
+                                'evidence': {'missing_header': header},
                                 'recommendation': f'Add {header} header with appropriate value',
                                 'cwe_id': cwe,
-                                'confidence_score': 95
+                                'confidence_score': 0.95
                             })
                         else:
                             metadata[header] = headers[header]
                     
                 except httpx.RequestError as e:
-                    errors.append(f"HTTP request failed: {str(e)}")
+                    detail = str(e).strip() or e.__class__.__name__
+                    errors.append(f"HTTP request failed: {detail}")
                     
         except Exception as e:
             errors.append(f"Scan failed: {str(e)}")
@@ -207,24 +202,14 @@ class SecurityHeadersWrapper(BaseToolWrapper):
 
 class SSLScannerWrapper(BaseToolWrapper):
     """SSL/TLS configuration scanner"""
+    name = "ssl"
+    description = "Checks SSL/TLS configuration and certificate validity"
     
     def __init__(self, config: Dict[str, Any] = None):
         """Initialize without dependency validation"""
         self.config = config or {}
         self.logger = logger.bind(tool="ssl")
-    
-    @property
-    def name(self) -> str:
-        return "ssl"
-    
-    @property
-    def display_name(self) -> str:
-        return "SSL/TLS Scanner"
-    
-    @property
-    def description(self) -> str:
-        return "Checks SSL/TLS configuration and certificate validity"
-    
+
     def parse_output(self, raw_output: str) -> List[Dict[str, Any]]:
         """Not used for async tools"""
         return []
@@ -233,6 +218,8 @@ class SSLScannerWrapper(BaseToolWrapper):
         """Run SSL/TLS scan"""
         from datetime import datetime
         start_time = datetime.now()
+        opts = config or {}
+        socket_timeout = float(opts.get("timeout", 6))
         
         findings = []
         errors = []
@@ -249,16 +236,16 @@ class SSLScannerWrapper(BaseToolWrapper):
                     'description': 'Website does not use HTTPS encryption',
                     'risk_level': RiskLevel.HIGH,
                     'affected_url': target_url,
-                    'evidence': f'Protocol: {parsed.scheme}',
+                    'evidence': {'protocol': parsed.scheme},
                     'recommendation': 'Enable HTTPS for all pages',
                     'cwe_id': 'CWE-319',
-                    'confidence_score': 100
+                    'confidence_score': 1.0
                 })
             else:
                 # Check SSL certificate
                 try:
                     context = ssl.create_default_context()
-                    with socket.create_connection((hostname, port), timeout=10) as sock:
+                    with socket.create_connection((hostname, port), timeout=socket_timeout) as sock:
                         with context.wrap_socket(sock, server_hostname=hostname) as ssock:
                             cert = ssock.getpeercert()
                             
@@ -273,10 +260,10 @@ class SSLScannerWrapper(BaseToolWrapper):
                                     'description': f'Server supports weak protocol: {ssl_version}',
                                     'risk_level': RiskLevel.HIGH,
                                     'affected_url': target_url,
-                                    'evidence': f'Protocol: {ssl_version}',
+                                    'evidence': {'protocol': ssl_version},
                                     'recommendation': 'Disable old SSL/TLS versions, use TLS 1.2+',
                                     'cwe_id': 'CWE-326',
-                                    'confidence_score': 95
+                                    'confidence_score': 0.95
                                 })
                             
                             # Certificate info
@@ -290,13 +277,14 @@ class SSLScannerWrapper(BaseToolWrapper):
                         'description': f'SSL certificate validation failed: {str(e)}',
                         'risk_level': RiskLevel.HIGH,
                         'affected_url': target_url,
-                        'evidence': str(e),
+                        'evidence': {'error': str(e)},
                         'recommendation': 'Fix SSL certificate configuration',
                         'cwe_id': 'CWE-295',
-                        'confidence_score': 90
+                        'confidence_score': 0.90
                     })
                 except Exception as e:
-                    errors.append(f"SSL check failed: {str(e)}")
+                    detail = str(e).strip() or e.__class__.__name__
+                    errors.append(f"SSL check failed: {detail}")
                     
         except Exception as e:
             errors.append(f"Scan failed: {str(e)}")
@@ -320,24 +308,14 @@ class SSLScannerWrapper(BaseToolWrapper):
 
 class PortScannerWrapper(BaseToolWrapper):
     """Simple port scanner"""
+    name = "ports"
+    description = "Scans common ports for open services"
     
     def __init__(self, config: Dict[str, Any] = None):
         """Initialize without dependency validation"""
         self.config = config or {}
         self.logger = logger.bind(tool="ports")
-    
-    @property
-    def name(self) -> str:
-        return "ports"
-    
-    @property
-    def display_name(self) -> str:
-        return "Port Scanner"
-    
-    @property
-    def description(self) -> str:
-        return "Scans common ports for open services"
-    
+
     def parse_output(self, raw_output: str) -> List[Dict[str, Any]]:
         """Not used for async tools"""
         return []
@@ -395,9 +373,9 @@ class PortScannerWrapper(BaseToolWrapper):
                         'description': f'{desc} detected on port {port}',
                         'risk_level': risk,
                         'affected_url': f'{hostname}:{port}',
-                        'evidence': f'Open port: {port}',
+                        'evidence': {'port': port, 'service': service},
                         'recommendation': f'Ensure port {port} is properly secured or firewalled',
-                        'confidence_score': 90
+                        'confidence_score': 0.90
                     })
                     
         except Exception as e:

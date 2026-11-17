@@ -313,131 +313,248 @@
                 renderReport(data);
                 
             } catch (error) {
-                document.getElementById('loading').innerHTML = `
-                    <h2 style="color: #d32f2f;">❌ Hata</h2>
-                    <p>${error.message}</p>
-                    <a href="/scan" class="btn btn-primary" style="margin-top: 20px;">Tarama Sayfasına Dön</a>
-                `;
+                const loading = document.getElementById('loading');
+                loading.textContent = '';
+
+                const title = document.createElement('h2');
+                title.style.color = '#d32f2f';
+                title.textContent = '❌ Hata';
+
+                const message = document.createElement('p');
+                message.textContent = error.message;
+
+                const link = document.createElement('a');
+                link.href = '/scan';
+                link.className = 'btn btn-primary';
+                link.style.marginTop = '20px';
+                link.textContent = 'Tarama Sayfasına Dön';
+
+                loading.appendChild(title);
+                loading.appendChild(message);
+                loading.appendChild(link);
             }
         }
         
         function renderReport(data) {
             const container = document.getElementById('reportContent');
-            const summary = data.summary;
-            
-            // Header
-            let html = `
-                <div class="header">
-                    <h1>🔒 Güvenlik Tarama Raporu</h1>
-                    <div class="target">${summary.target_url}</div>
-                    <p style="color: #666; margin-top: 10px;">
-                        Tarama Tarihi: ${new Date(summary.scan_date).toLocaleString('tr-TR')} | 
-                        Süre: ${Math.floor(summary.scan_duration_seconds / 60)} dakika
-                    </p>
-                </div>
-            `;
-            
-            // Executive Summary
-            html += `
-                <div class="exec-summary">
-                    <h2>📋 Yönetici Özeti</h2>
-                    <p>${data.executive_summary}</p>
-                </div>
-            `;
-            
-            // Summary Cards
-            html += '<div class="summary-grid">';
-            html += `
-                <div class="summary-card total">
-                    <div class="number">${summary.total_findings}</div>
-                    <div class="label">Toplam Bulgu</div>
-                </div>
-            `;
-            
-            summary.findings_by_risk.forEach(item => {
+            container.textContent = '';
+            const summary = data.summary || {};
+            const riskLabels = {
+                'critical': 'Kritik',
+                'high': 'Yüksek',
+                'medium': 'Orta',
+                'low': 'Düşük',
+                'info': 'Bilgi'
+            };
+            const normalizeRiskLevel = (value) => {
+                const allowed = ['critical', 'high', 'medium', 'low', 'info'];
+                const normalized = String(value || '').toLowerCase();
+                return allowed.includes(normalized) ? normalized : 'info';
+            };
+
+            const header = document.createElement('div');
+            header.className = 'header';
+            const title = document.createElement('h1');
+            title.textContent = '🔒 Güvenlik Tarama Raporu';
+            const target = document.createElement('div');
+            target.className = 'target';
+            target.textContent = summary.target_url || '-';
+            const meta = document.createElement('p');
+            meta.style.color = '#666';
+            meta.style.marginTop = '10px';
+            const scanDate = summary.scan_date ? new Date(summary.scan_date) : null;
+            const scanDateText = scanDate && !Number.isNaN(scanDate.valueOf())
+                ? scanDate.toLocaleString('tr-TR')
+                : '-';
+            const durationMinutes = Number.isFinite(summary.scan_duration_seconds)
+                ? Math.floor(summary.scan_duration_seconds / 60)
+                : 0;
+            meta.textContent = `Tarama Tarihi: ${scanDateText} | Süre: ${durationMinutes} dakika`;
+            header.appendChild(title);
+            header.appendChild(target);
+            header.appendChild(meta);
+            container.appendChild(header);
+
+            const execSummary = document.createElement('div');
+            execSummary.className = 'exec-summary';
+            const execTitle = document.createElement('h2');
+            execTitle.textContent = '📋 Yönetici Özeti';
+            const execText = document.createElement('p');
+            execText.textContent = data.executive_summary || '';
+            execSummary.appendChild(execTitle);
+            execSummary.appendChild(execText);
+            container.appendChild(execSummary);
+
+            const summaryGrid = document.createElement('div');
+            summaryGrid.className = 'summary-grid';
+
+            const totalCard = document.createElement('div');
+            totalCard.className = 'summary-card total';
+            const totalNumber = document.createElement('div');
+            totalNumber.className = 'number';
+            totalNumber.textContent = String(summary.total_findings ?? 0);
+            const totalLabel = document.createElement('div');
+            totalLabel.className = 'label';
+            totalLabel.textContent = 'Toplam Bulgu';
+            totalCard.appendChild(totalNumber);
+            totalCard.appendChild(totalLabel);
+            summaryGrid.appendChild(totalCard);
+
+            (summary.findings_by_risk || []).forEach(item => {
                 if (item.count > 0) {
-                    const labels = {
-                        'critical': 'Kritik',
-                        'high': 'Yüksek',
-                        'medium': 'Orta',
-                        'low': 'Düşük',
-                        'info': 'Bilgi'
-                    };
-                    html += `
-                        <div class="summary-card ${item.risk_level}">
-                            <div class="number">${item.count}</div>
-                            <div class="label">${labels[item.risk_level]}</div>
-                        </div>
-                    `;
+                    const riskLevel = normalizeRiskLevel(item.risk_level);
+                    const card = document.createElement('div');
+                    card.className = `summary-card ${riskLevel}`;
+                    const number = document.createElement('div');
+                    number.className = 'number';
+                    number.textContent = String(item.count ?? 0);
+                    const label = document.createElement('div');
+                    label.className = 'label';
+                    label.textContent = riskLabels[riskLevel] || 'Bilgi';
+                    card.appendChild(number);
+                    card.appendChild(label);
+                    summaryGrid.appendChild(card);
                 }
             });
-            html += '</div>';
-            
-            // Findings
-            html += '<div class="section"><h2>🔍 Detaylı Bulgular</h2><div class="findings-list">';
-            
-            if (data.findings.length === 0) {
-                html += '<p style="text-align: center; padding: 40px; color: #666;">Güvenlik açığı bulunamadı.</p>';
+            container.appendChild(summaryGrid);
+
+            const findingsSection = document.createElement('div');
+            findingsSection.className = 'section';
+            const findingsTitle = document.createElement('h2');
+            findingsTitle.textContent = '🔍 Detaylı Bulgular';
+            const findingsList = document.createElement('div');
+            findingsList.className = 'findings-list';
+            findingsSection.appendChild(findingsTitle);
+            findingsSection.appendChild(findingsList);
+
+            if (!data.findings || data.findings.length === 0) {
+                const empty = document.createElement('p');
+                empty.style.textAlign = 'center';
+                empty.style.padding = '40px';
+                empty.style.color = '#666';
+                empty.textContent = 'Güvenlik açığı bulunamadı.';
+                findingsList.appendChild(empty);
             } else {
                 data.findings.forEach(finding => {
-                    const riskLabels = {
-                        'critical': 'Kritik',
-                        'high': 'Yüksek',
-                        'medium': 'Orta',
-                        'low': 'Düşük',
-                        'info': 'Bilgi'
-                    };
-                    
-                    html += `
-                        <div class="finding ${finding.risk_level}">
-                            <div class="finding-header">
-                                <div class="finding-title">${finding.title}</div>
-                                <span class="risk-badge ${finding.risk_level}">${riskLabels[finding.risk_level]}</span>
-                            </div>
-                            <div class="finding-details">
-                                <p><strong>📍 Etkilenen URL:</strong> ${finding.affected_url}</p>
-                                <p><strong>📝 Açıklama:</strong> ${finding.description}</p>
-                                ${finding.cwe_id ? `<p><strong>🔖 CWE ID:</strong> ${finding.cwe_id}</p>` : ''}
-                                ${finding.cvss_score ? `<p><strong>⚡ CVSS Skoru:</strong> ${finding.cvss_score}</p>` : ''}
-                                <div class="recommendation">
-                                    <strong>💡 Öneri:</strong> ${finding.recommendation}
-                                </div>
-                                <div class="metadata">
-                                    <span>🔧 Araç: ${finding.tool_name}</span>
-                                    <span>📅 Tespit: ${new Date(finding.found_at).toLocaleString('tr-TR')}</span>
-                                </div>
-                            </div>
-                        </div>
-                    `;
+                    const riskLevel = normalizeRiskLevel(finding.risk_level);
+                    const item = document.createElement('div');
+                    item.className = `finding ${riskLevel}`;
+
+                    const headerRow = document.createElement('div');
+                    headerRow.className = 'finding-header';
+                    const titleEl = document.createElement('div');
+                    titleEl.className = 'finding-title';
+                    titleEl.textContent = finding.title || 'Bilinmeyen bulgu';
+                    const badge = document.createElement('span');
+                    badge.className = `risk-badge ${riskLevel}`;
+                    badge.textContent = riskLabels[riskLevel] || 'Bilgi';
+                    headerRow.appendChild(titleEl);
+                    headerRow.appendChild(badge);
+
+                    const details = document.createElement('div');
+                    details.className = 'finding-details';
+
+                    const affected = document.createElement('p');
+                    const affectedLabel = document.createElement('strong');
+                    affectedLabel.textContent = '📍 Etkilenen URL:';
+                    affected.appendChild(affectedLabel);
+                    affected.appendChild(document.createTextNode(` ${finding.affected_url || '-'}`));
+
+                    const description = document.createElement('p');
+                    const descLabel = document.createElement('strong');
+                    descLabel.textContent = '📝 Açıklama:';
+                    description.appendChild(descLabel);
+                    description.appendChild(document.createTextNode(` ${finding.description || ''}`));
+
+                    details.appendChild(affected);
+                    details.appendChild(description);
+
+                    if (finding.cwe_id) {
+                        const cwe = document.createElement('p');
+                        const cweLabel = document.createElement('strong');
+                        cweLabel.textContent = '🔖 CWE ID:';
+                        cwe.appendChild(cweLabel);
+                        cwe.appendChild(document.createTextNode(` ${finding.cwe_id}`));
+                        details.appendChild(cwe);
+                    }
+
+                    if (finding.cvss_score) {
+                        const cvss = document.createElement('p');
+                        const cvssLabel = document.createElement('strong');
+                        cvssLabel.textContent = '⚡ CVSS Skoru:';
+                        cvss.appendChild(cvssLabel);
+                        cvss.appendChild(document.createTextNode(` ${finding.cvss_score}`));
+                        details.appendChild(cvss);
+                    }
+
+                    const recommendation = document.createElement('div');
+                    recommendation.className = 'recommendation';
+                    const recLabel = document.createElement('strong');
+                    recLabel.textContent = '💡 Öneri:';
+                    recommendation.appendChild(recLabel);
+                    recommendation.appendChild(document.createTextNode(` ${finding.recommendation || ''}`));
+
+                    const metadata = document.createElement('div');
+                    metadata.className = 'metadata';
+                    const toolSpan = document.createElement('span');
+                    toolSpan.textContent = `🔧 Araç: ${finding.tool_name || '-'}`;
+                    const dateSpan = document.createElement('span');
+                    const foundDate = finding.found_at ? new Date(finding.found_at) : null;
+                    const foundText = foundDate && !Number.isNaN(foundDate.valueOf())
+                        ? foundDate.toLocaleString('tr-TR')
+                        : '-';
+                    dateSpan.textContent = `📅 Tespit: ${foundText}`;
+                    metadata.appendChild(toolSpan);
+                    metadata.appendChild(dateSpan);
+
+                    details.appendChild(recommendation);
+                    details.appendChild(metadata);
+
+                    item.appendChild(headerRow);
+                    item.appendChild(details);
+                    findingsList.appendChild(item);
                 });
             }
-            
-            html += '</div></div>';
-            
-            // Recommendations
-            if (data.recommendations && data.recommendations.length > 0) {
-                html += `
-                    <div class="section">
-                        <div class="recommendations-section">
-                            <h3>💡 Genel Öneriler</h3>
-                            <ul>
-                                ${data.recommendations.map(rec => `<li>${rec}</li>`).join('')}
-                            </ul>
-                        </div>
-                    </div>
-                `;
+
+            container.appendChild(findingsSection);
+
+            if (Array.isArray(data.recommendations) && data.recommendations.length > 0) {
+                const section = document.createElement('div');
+                section.className = 'section';
+                const recommendations = document.createElement('div');
+                recommendations.className = 'recommendations-section';
+                const recTitle = document.createElement('h3');
+                recTitle.textContent = '💡 Genel Öneriler';
+                const list = document.createElement('ul');
+                data.recommendations.forEach(rec => {
+                    const li = document.createElement('li');
+                    li.textContent = rec;
+                    list.appendChild(li);
+                });
+                recommendations.appendChild(recTitle);
+                recommendations.appendChild(list);
+                section.appendChild(recommendations);
+                container.appendChild(section);
             }
-            
-            // Actions
-            html += `
-                <div class="actions">
-                    <a href="/scan" class="btn btn-primary">🔍 Yeni Tarama</a>
-                    <a href="/" class="btn btn-secondary">🏠 Ana Sayfa</a>
-                    <button onclick="window.print()" class="btn btn-secondary">🖨️ Yazdır</button>
-                </div>
-            `;
-            
-            container.innerHTML = html;
+
+            const actions = document.createElement('div');
+            actions.className = 'actions';
+            const scanLink = document.createElement('a');
+            scanLink.href = '/scan';
+            scanLink.className = 'btn btn-primary';
+            scanLink.textContent = '🔍 Yeni Tarama';
+            const homeLink = document.createElement('a');
+            homeLink.href = '/';
+            homeLink.className = 'btn btn-secondary';
+            homeLink.textContent = '🏠 Ana Sayfa';
+            const printBtn = document.createElement('button');
+            printBtn.className = 'btn btn-secondary';
+            printBtn.textContent = '🖨️ Yazdır';
+            printBtn.addEventListener('click', () => window.print());
+            actions.appendChild(scanLink);
+            actions.appendChild(homeLink);
+            actions.appendChild(printBtn);
+            container.appendChild(actions);
         }
         
         // Sayfa yüklendiğinde raporu getir

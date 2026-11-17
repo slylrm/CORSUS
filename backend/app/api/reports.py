@@ -3,19 +3,44 @@ Reports API Endpoints
 Tarama sonuç raporları
 """
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Response, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
 from enum import Enum
 import json
+from typing import Any
 
 from app.utils.logger import logger
 from app.core.scanner import scanner_engine
+from app.core.persistence import get_findings_for_scan, get_scan_record
+
+
+def _sanitize(obj: Any) -> Any:
+    """Round-trip through JSON to strip non-serialisable / circular objects."""
+    try:
+        return json.loads(json.dumps(obj, default=str))
+    except Exception:
+        return {} if isinstance(obj, dict) else [] if isinstance(obj, list) else str(obj)
 
 
 router = APIRouter()
+
+
+def _get_owner_id(request: Request) -> Optional[str]:
+    return getattr(request.state, "owner_id", None)
+
+
+def _ensure_owner_access(owner_id: Optional[str], scan_or_record: Any, scan_id: str) -> None:
+    if not owner_id:
+        return
+    if isinstance(scan_or_record, dict):
+        if scan_or_record.get("owner_id") != owner_id:
+            raise HTTPException(status_code=404, detail=f"Tarama bulunamadı: {scan_id}")
+    else:
+        if getattr(scan_or_record, "owner_id", None) != owner_id:
+            raise HTTPException(status_code=404, detail=f"Tarama bulunamadı: {scan_id}")
 
 
 def _is_verified(finding) -> bool:
@@ -24,6 +49,68 @@ def _is_verified(finding) -> bool:
         value = getattr(verification_status, "value", verification_status)
         return value == "verified"
     return bool(getattr(finding, "verified", False))
+
+
+def _parse_dt(value) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _risk_value(finding) -> str:
+    risk_level = getattr(finding, "risk_level", None)
+    if risk_level is None and isinstance(finding, dict):
+        risk_level = finding.get("risk_level")
+    return str(getattr(risk_level, "value", risk_level or "info")).lower()
+
+
+def _simple_pdf_bytes(lines: List[str]) -> bytes:
+    def esc(text: str) -> str:
+        return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+    content_lines = ["BT", "/F1 10 Tf", "50 790 Td", "14 TL"]
+    for idx, line in enumerate(lines[:260]):
+        safe = esc((line or "")[:120])
+        if idx == 0:
+            content_lines.append(f"({safe}) Tj")
+        else:
+            content_lines.append("T*")
+            content_lines.append(f"({safe}) Tj")
+    content_lines.append("ET")
+    stream = "\n".join(content_lines).encode("latin-1", errors="replace")
+
+    objects = []
+    objects.append(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n")
+    objects.append(b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n")
+    objects.append(
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n"
+    )
+    objects.append(b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n")
+    objects.append(
+        b"5 0 obj\n<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream\nendobj\n"
+    )
+
+    pdf = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for obj in objects:
+        offsets.append(len(pdf))
+        pdf.extend(obj)
+
+    xref_start = len(pdf)
+    pdf.extend(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+    pdf.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        pdf.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+
+    pdf.extend(
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_start}\n%%EOF\n".encode("ascii")
+    )
+    return bytes(pdf)
 
 
 class ReportFormat(str, Enum):
@@ -78,8 +165,32 @@ class DetailedReport(BaseModel):
     recommendations: List[str]
 
 
+def _finding_to_lines(finding: FindingDetail) -> List[str]:
+    evidence = finding.evidence or {}
+    lines = [
+        f"   Description: {finding.description}",
+        f"   URL: {finding.affected_url}",
+        f"   Tool: {finding.tool_name}",
+        f"   Verified: {finding.verified}",
+    ]
+    if finding.cwe_id:
+        lines.append(f"   CWE: {finding.cwe_id}")
+    if finding.cvss_score is not None:
+        lines.append(f"   CVSS: {finding.cvss_score}")
+    if finding.found_at:
+        lines.append(f"   Found at: {finding.found_at.isoformat()}")
+    if finding.recommendation:
+        lines.append(f"   Recommendation: {finding.recommendation}")
+    if evidence:
+        lines.append("   Evidence:")
+        for key in ["raw", "endpoint", "issue_type", "references", "potential_false_positive", "endpoints", "template", "matcher-name", "extracted-results", "curl-command"]:
+            if key in evidence and evidence.get(key) not in (None, "", [], {}):
+                lines.append(f"     - {key}: {evidence.get(key)}")
+    return lines
+
+
 @router.get("/{scan_id}/summary", response_model=ReportSummary)
-async def get_report_summary(scan_id: str):
+async def get_report_summary(scan_id: str, request: Request):
     """
     Tarama sonuç özeti
     
@@ -90,19 +201,44 @@ async def get_report_summary(scan_id: str):
         Yönetici özeti (executive summary)
     """
     
+    owner_id = _get_owner_id(request)
     scan = scanner_engine.get_scan(scan_id)
-    
-    if not scan:
-        raise HTTPException(status_code=404, detail=f"Tarama bulunamadı: {scan_id}")
-    
-    # Risk seviyelerine göre bulguları grupla
+    if scan:
+        _ensure_owner_access(owner_id, scan, scan_id)
+
+    if scan:
+        findings = list(scan.findings or [])
+        target_url = scan.target_url
+        scan_date = scan.created_at
+        tools_used = list(scan.tools or [])
+        started_at = scan.started_at
+        completed_at = scan.completed_at
+        verified_findings = sum(1 for f in findings if _is_verified(f))
+        false_positives = sum(
+            1
+            for f in findings
+            if str(getattr(getattr(f, "verification_status", None), "value", "")).lower() == "false_positive"
+        )
+    else:
+        record = get_scan_record(scan_id, owner_id=owner_id)
+        if not record:
+            raise HTTPException(status_code=404, detail=f"Tarama bulunamadı: {scan_id}")
+
+        findings = get_findings_for_scan(scan_id)
+        target_url = record.get("target_url", "")
+        scan_date = _parse_dt(record.get("created_at")) or datetime.now()
+        tools_used = list(record.get("tools") or [])
+        started_at = _parse_dt(record.get("started_at"))
+        completed_at = _parse_dt(record.get("completed_at"))
+        verified_findings = sum(1 for f in findings if str(f.get("verification_status", "")).lower() == "verified")
+        false_positives = sum(1 for f in findings if str(f.get("verification_status", "")).lower() == "false_positive")
+
     findings_by_risk = {}
-    for finding in scan.findings:
-        risk = finding.risk_level.value
+    for finding in findings:
+        risk = _risk_value(finding)
         findings_by_risk[risk] = findings_by_risk.get(risk, 0) + 1
-    
-    # Yüzdeleri hesapla
-    total = len(scan.findings)
+
+    total = len(findings)
     risk_summary = []
     for risk in ["critical", "high", "medium", "low", "info"]:
         count = findings_by_risk.get(risk, 0)
@@ -112,27 +248,26 @@ async def get_report_summary(scan_id: str):
             count=count,
             percentage=round(percentage, 1)
         ))
-    
-    # Scan süresi hesapla
+
     duration = 0
-    if scan.started_at and scan.completed_at:
-        duration = int((scan.completed_at - scan.started_at).total_seconds())
-    
+    if started_at and completed_at:
+        duration = int((completed_at - started_at).total_seconds())
+
     return ReportSummary(
-        scan_id=scan.scan_id,
-        target_url=scan.target_url,
-        scan_date=scan.created_at,
-        scan_duration_seconds=duration,
-        total_findings=len(scan.findings),
+        scan_id=scan_id,
+        target_url=target_url,
+        scan_date=scan_date,
+        scan_duration_seconds=max(duration, 0),
+        total_findings=total,
         findings_by_risk=risk_summary,
-        tools_used=scan.tools,
-        verified_findings=sum(1 for f in scan.findings if _is_verified(f)),
-        false_positives=0
+        tools_used=tools_used,
+        verified_findings=verified_findings,
+        false_positives=false_positives,
     )
 
 
 @router.get("/{scan_id}/detailed", response_model=DetailedReport)
-async def get_detailed_report(scan_id: str):
+async def get_detailed_report(scan_id: str, request: Request):
     """
     Detaylı tarama raporu
     
@@ -143,43 +278,65 @@ async def get_detailed_report(scan_id: str):
         Tüm bulgular ve detaylar
     """
     
+    owner_id = _get_owner_id(request)
     scan = scanner_engine.get_scan(scan_id)
-    
-    if not scan:
+    if scan:
+        _ensure_owner_access(owner_id, scan, scan_id)
+    record = get_scan_record(scan_id, owner_id=owner_id) if scan is None else None
+
+    if scan is None and record is None:
         raise HTTPException(status_code=404, detail=f"Tarama bulunamadı: {scan_id}")
-    
-    # Özet bilgi
-    summary = await get_report_summary(scan_id)
-    
-    # Bulguları dönüştür
-    findings = [
-        FindingDetail(
-            id=f.id,
-            title=f.title,
-            description=f.description,
-            risk_level=f.risk_level.value,
-            affected_url=f.affected_url,
-            evidence=f.evidence,
-            recommendation=f.recommendation,
-            cwe_id=f.cwe_id,
-            cvss_score=f.cvss_score,
-            verified=_is_verified(f),
-            tool_name=f.tool_name,
-            found_at=f.found_at
-        )
-        for f in scan.findings
-    ]
-    
-    # Yönetici özeti oluştur
-    critical_count = sum(1 for f in scan.findings if f.risk_level.value == "critical")
-    high_count = sum(1 for f in scan.findings if f.risk_level.value == "high")
-    
-    if critical_count > 0:
-        exec_summary = f"⚠️ KRİTİK: {scan.target_url} için yapılan güvenlik taramasında {critical_count} kritik ve {high_count} yüksek riskli güvenlik açığı tespit edildi. Acil müdahale gereklidir."
-    elif high_count > 0:
-        exec_summary = f"⚠️ YÜKSEK RİSK: {scan.target_url} için yapılan güvenlik taramasında {high_count} yüksek riskli güvenlik açığı tespit edildi. Öncelikli olarak ele alınmalıdır."
+
+    summary = await get_report_summary(scan_id, request)
+
+    if scan:
+        findings = [
+            FindingDetail(
+                id=f.id,
+                title=f.title,
+                description=f.description,
+                risk_level=f.risk_level.value,
+                affected_url=f.affected_url,
+                evidence=_sanitize(f.evidence),
+                recommendation=f.recommendation,
+                cwe_id=f.cwe_id,
+                cvss_score=f.cvss_score,
+                verified=_is_verified(f),
+                tool_name=f.tool_name,
+                found_at=f.found_at
+            )
+            for f in scan.findings
+        ]
     else:
-        exec_summary = f"✅ {scan.target_url} için yapılan güvenlik taramasında kritik veya yüksek riskli güvenlik açığı tespit edilmedi. Düşük ve orta seviye bulgular gözden geçirilmelidir."
+        findings_rows = get_findings_for_scan(scan_id)
+        findings = [
+            FindingDetail(
+                id=row.get("id", ""),
+                title=row.get("title", "Unknown"),
+                description=row.get("description", ""),
+                risk_level=row.get("risk_level", "info"),
+                affected_url=row.get("affected_url", ""),
+                evidence=_sanitize(row.get("evidence") or {}),
+                recommendation=row.get("recommendation", ""),
+                cwe_id=row.get("cwe_id"),
+                cvss_score=row.get("cvss_score"),
+                verified=str(row.get("verification_status", "")).lower() == "verified",
+                tool_name=row.get("tool_name", "unknown"),
+                found_at=_parse_dt(row.get("found_at")) or datetime.now(),
+            )
+            for row in findings_rows
+        ]
+
+    critical_count = sum(1 for f in findings if f.risk_level == "critical")
+    high_count = sum(1 for f in findings if f.risk_level == "high")
+    
+    target_url = summary.target_url
+    if critical_count > 0:
+        exec_summary = f"⚠️ KRİTİK: {target_url} için yapılan güvenlik taramasında {critical_count} kritik ve {high_count} yüksek riskli güvenlik açığı tespit edildi. Acil müdahale gereklidir."
+    elif high_count > 0:
+        exec_summary = f"⚠️ YÜKSEK RİSK: {target_url} için yapılan güvenlik taramasında {high_count} yüksek riskli güvenlik açığı tespit edildi. Öncelikli olarak ele alınmalıdır."
+    else:
+        exec_summary = f"✅ {target_url} için yapılan güvenlik taramasında kritik veya yüksek riskli güvenlik açığı tespit edilmedi. Düşük ve orta seviye bulgular gözden geçirilmelidir."
     
     # Genel öneriler
     recommendations = [
@@ -201,7 +358,8 @@ async def get_detailed_report(scan_id: str):
 @router.get("/{scan_id}/export")
 async def export_report(
     scan_id: str,
-    format: ReportFormat = ReportFormat.JSON
+    format: ReportFormat = ReportFormat.JSON,
+    request: Request = None,
 ):
     """
     Raporu belirtilen formatta indir
@@ -217,10 +375,13 @@ async def export_report(
     logger.info(f"Exporting report {scan_id} as {format}")
     
     # Detaylı raporu al
-    detailed_report = await get_detailed_report(scan_id)
+    detailed_report = await get_detailed_report(scan_id, request)
     
     if format == ReportFormat.JSON:
-        content = json.dumps(detailed_report.model_dump(mode="json"), indent=2, default=str)
+        payload = detailed_report.model_dump(mode="json")
+        payload["generated_at"] = datetime.now().isoformat()
+        payload["format"] = "json"
+        content = json.dumps(payload, indent=2, default=str)
         media_type = "application/json"
         filename = f"report_{scan_id}.json"
         
@@ -245,11 +406,46 @@ async def export_report(
         )
     
     elif format == ReportFormat.PDF:
-        # TODO: WeasyPrint ile PDF generate et
-        raise HTTPException(status_code=501, detail="PDF export not implemented yet")
+        pdf_lines = [
+            f"WeppenTest Security Report - {detailed_report.summary.scan_id}",
+            f"Target: {detailed_report.summary.target_url}",
+            f"Scan Date: {detailed_report.summary.scan_date.isoformat()}",
+            f"Scan Duration (s): {detailed_report.summary.scan_duration_seconds}",
+            f"Total Findings: {detailed_report.summary.total_findings}",
+            f"Verified Findings: {detailed_report.summary.verified_findings}",
+            f"False Positives: {detailed_report.summary.false_positives}",
+            f"Tools Used: {', '.join(detailed_report.summary.tools_used) if detailed_report.summary.tools_used else '-'}",
+            "",
+            "Executive Summary:",
+            detailed_report.executive_summary.strip(),
+            "",
+            "Risk Distribution:",
+        ]
+        for risk in detailed_report.summary.findings_by_risk:
+            pdf_lines.append(f"- {risk.risk_level.upper()}: {risk.count} ({risk.percentage:.1f}%)")
+        pdf_lines.extend([
+            "Findings:",
+        ])
+        for idx, finding in enumerate(detailed_report.findings, start=1):
+            pdf_lines.append(f"{idx}. [{finding.risk_level.upper()}] {finding.title} ({finding.tool_name})")
+            pdf_lines.extend(_finding_to_lines(finding))
+            pdf_lines.append("")
+
+        if detailed_report.recommendations:
+            pdf_lines.append("Recommendations:")
+            for idx, recommendation in enumerate(detailed_report.recommendations, start=1):
+                pdf_lines.append(f"{idx}. {recommendation}")
+
+        pdf_content = _simple_pdf_bytes(pdf_lines)
+        return Response(
+            content=pdf_content,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f"attachment; filename=report_{scan_id}.pdf"
+            }
+        )
     
     elif format == ReportFormat.MARKDOWN:
-        # TODO: Markdown format generate et
         md_content = _generate_markdown_report(detailed_report)
         
         return Response(
@@ -264,7 +460,8 @@ async def export_report(
 @router.get("/{scan_id}/findings/{risk_level}")
 async def get_findings_by_risk(
     scan_id: str,
-    risk_level: str
+    risk_level: str,
+    request: Request,
 ):
     """
     Belirli risk seviyesindeki bulguları getir
@@ -277,12 +474,59 @@ async def get_findings_by_risk(
         Filtrelenmiş bulgular
     """
     
-    # TODO: Risk seviyesine göre filtrele
-    
+    allowed_levels = {"critical", "high", "medium", "low", "info"}
+    normalized_level = risk_level.lower().strip()
+    if normalized_level not in allowed_levels:
+        raise HTTPException(status_code=400, detail=f"Invalid risk level: {risk_level}")
+
+    owner_id = _get_owner_id(request)
+    scan = scanner_engine.get_scan(scan_id)
+    if scan:
+        _ensure_owner_access(owner_id, scan, scan_id)
+    findings_payload = []
+
+    if scan:
+        for finding in scan.findings:
+            if _risk_value(finding) != normalized_level:
+                continue
+            findings_payload.append(
+                {
+                    "id": finding.id,
+                    "title": finding.title,
+                    "description": finding.description,
+                    "risk_level": finding.risk_level.value,
+                    "affected_url": finding.affected_url,
+                    "tool_name": finding.tool_name,
+                    "recommendation": finding.recommendation,
+                    "verified": _is_verified(finding),
+                    "found_at": finding.found_at,
+                }
+            )
+    else:
+        record = get_scan_record(scan_id, owner_id=owner_id)
+        if not record:
+            raise HTTPException(status_code=404, detail=f"Tarama bulunamadı: {scan_id}")
+        rows = get_findings_for_scan(scan_id, normalized_level)
+        findings_payload = [
+            {
+                "id": row.get("id"),
+                "title": row.get("title"),
+                "description": row.get("description"),
+                "risk_level": row.get("risk_level"),
+                "affected_url": row.get("affected_url"),
+                "tool_name": row.get("tool_name"),
+                "recommendation": row.get("recommendation"),
+                "verified": str(row.get("verification_status", "")).lower() == "verified",
+                "found_at": _parse_dt(row.get("found_at")),
+            }
+            for row in rows
+        ]
+
     return {
         "scan_id": scan_id,
-        "risk_level": risk_level,
-        "findings": []
+        "risk_level": normalized_level,
+        "count": len(findings_payload),
+        "findings": findings_payload,
     }
 
 

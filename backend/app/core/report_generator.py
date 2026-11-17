@@ -29,6 +29,14 @@ class ReportGenerator:
         self.logger = logger.bind(component="ReportGenerator")
         self.output_dir = settings.REPORT_OUTPUT_DIR
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def _pdf_line(text: str) -> str:
+        replacements = {
+            "ç": "c", "ğ": "g", "ı": "i", "ö": "o", "ş": "s", "ü": "u",
+            "Ç": "C", "Ğ": "G", "İ": "I", "Ö": "O", "Ş": "S", "Ü": "U",
+        }
+        return "".join(replacements.get(ch, ch) for ch in str(text))
     
     def generate_report(
         self,
@@ -225,6 +233,9 @@ Bu rapor, {target_url} web sitesinin güvenlik taraması sonuçlarını içerir.
         .medium { border-left-color: #d69e2e; }
         .low { border-left-color: #38a169; }
         .info { border-left-color: #3182ce; }
+        .meta { color: #4a5568; margin-top: 8px; }
+        .evidence { background: #f7fafc; padding: 10px; border-radius: 8px; margin-top: 10px; white-space: pre-wrap; }
+        .badge { display: inline-block; padding: 4px 10px; border-radius: 999px; background: #edf2f7; margin-right: 8px; margin-bottom: 8px; }
     </style>
 </head>
 <body>
@@ -232,12 +243,30 @@ Bu rapor, {target_url} web sitesinin güvenlik taraması sonuçlarını içerir.
         <h1>🛡️ WeppenTest Güvenlik Raporu</h1>
         <p><strong>Site:</strong> {{ data.target_url }}</p>
         <p><strong>Tarih:</strong> {{ data.scan_date }}</p>
+        <p><strong>Scan ID:</strong> {{ data.scan_id }}</p>
     </div>
     
     <div class="summary">
         <h2>📊 Özet</h2>
         <p><strong>Toplam Bulgu:</strong> {{ data.total_findings }}</p>
         <p><strong>Doğrulanmış:</strong> {{ data.verified_findings }}</p>
+        <p><strong>Tarama Süresi:</strong> {{ data.scan_duration }}s</p>
+        <p><strong>Araçlar:</strong> {{ data.tools_used | join(', ') if data.tools_used else '-' }}</p>
+        <h3>Risk Dağılımı</h3>
+        {% for item in data.risk_distribution %}
+          <span class="badge">{{ item.risk_level.upper() }}: {{ item.count }} ({{ '%.1f'|format(item.percentage) }}%)</span>
+        {% endfor %}
+    </div>
+
+    <div class="summary">
+        <h2>🧾 Yönetici Özeti</h2>
+        <div class="meta">{{ data.executive_summary | replace('\n', '<br>') | safe }}</div>
+        <h3>Öneriler</h3>
+        <ul>
+        {% for item in data.recommendations %}
+          <li>{{ item }}</li>
+        {% endfor %}
+        </ul>
     </div>
     
     <h2>🔍 Bulgular</h2>
@@ -247,6 +276,16 @@ Bu rapor, {target_url} web sitesinin güvenlik taraması sonuçlarını içerir.
         <p><strong>Risk:</strong> {{ finding.risk_level }}</p>
         <p>{{ finding.description }}</p>
         <p><strong>URL:</strong> <code>{{ finding.affected_url }}</code></p>
+        <p><strong>Araç:</strong> {{ finding.tool_name }}</p>
+        <p><strong>Doğrulandı:</strong> {{ finding.verified }}</p>
+        {% if finding.cwe_id %}<p><strong>CWE:</strong> {{ finding.cwe_id }}</p>{% endif %}
+        {% if finding.cvss_score is not none %}<p><strong>CVSS:</strong> {{ finding.cvss_score }}</p>{% endif %}
+        <p><strong>İnceleme Zamanı:</strong> {{ finding.found_at }}</p>
+        <p><strong>Öneri:</strong> {{ finding.recommendation }}</p>
+        <details>
+            <summary>Kanıt</summary>
+            <div class="evidence">{{ finding.evidence | tojson(indent=2) }}</div>
+        </details>
     </div>
     {% endfor %}
 </body>
@@ -274,6 +313,8 @@ Bu rapor, {target_url} web sitesinin güvenlik taraması sonuçlarını içerir.
 **Site:** {data['target_url']}  
 **Tarih:** {data['scan_date']}  
 **Scan ID:** {data['scan_id']}
+    **Süre:** {data.get('scan_duration', 0)}s  
+    **Araçlar:** {', '.join(data.get('tools_used', [])) if data.get('tools_used') else '-'}
 
 ---
 
@@ -281,6 +322,28 @@ Bu rapor, {target_url} web sitesinin güvenlik taraması sonuçlarını içerir.
 
 - **Toplam Bulgu:** {data['total_findings']}
 - **Doğrulanmış:** {data['verified_findings']}
+
+    ## 📈 Risk Dağılımı
+
+    """
+
+        for item in data.get('risk_distribution', []):
+            md_content += f"- **{item['risk_level'].upper()}**: {item['count']} ({item['percentage']:.1f}%)\n"
+
+        md_content += f"""
+
+    ## 🧾 Yönetici Özeti
+
+    {data.get('executive_summary', '').strip()}
+
+    ## ✅ Öneriler
+
+    """
+
+        for recommendation in data.get('recommendations', []):
+            md_content += f"- {recommendation}\n"
+
+        md_content += """
 
 ---
 
@@ -294,8 +357,20 @@ Bu rapor, {target_url} web sitesinin güvenlik taraması sonuçlarını içerir.
 
 **Risk:** {finding['risk_level']}  
 **URL:** `{finding['affected_url']}`
+    **Araç:** {finding.get('tool_name', '-')}  
+    **Doğrulandı:** {finding.get('verified', False)}
 
-{finding['description']}
+    **Açıklama:**
+
+    {finding['description']}
+
+    **Öneri:** {finding.get('recommendation', '-')}
+
+    **Kanıt:**
+
+    ```json
+    {json.dumps(finding.get('evidence', {}), ensure_ascii=False, indent=2)}
+    ```
 
 ---
 """
@@ -311,9 +386,144 @@ Bu rapor, {target_url} web sitesinin güvenlik taraması sonuçlarını içerir.
     def _generate_pdf_report(
         self, scan_id: str, data: Dict[str, Any]
     ) -> Path:
-        """PDF rapor (WeasyPrint kullanarak)"""
-        
-        # TODO: WeasyPrint entegrasyonu
-        # HTML'den PDF'e dönüştür
-        
-        raise NotImplementedError("PDF generation not implemented yet")
+        """PDF rapor oluştur"""
+
+        lines: List[str] = [
+            "WeppenTest Security Report",
+            f"Scan ID: {scan_id}",
+            f"Target: {data.get('target_url', '-')}",
+            f"Scan Date: {data.get('scan_date', '-')}",
+            f"Duration: {data.get('scan_duration', 0)}s",
+            f"Tools: {', '.join(data.get('tools_used', [])) if data.get('tools_used') else '-'}",
+            f"Total Findings: {data.get('total_findings', 0)}",
+            f"Verified Findings: {data.get('verified_findings', 0)}",
+            "",
+            "Risk Distribution:",
+        ]
+
+        for item in data.get('risk_distribution', []):
+            lines.append(f"- {item['risk_level'].upper()}: {item['count']} ({item['percentage']:.1f}%)")
+
+        executive_summary = str(data.get('executive_summary', '')).strip()
+        if executive_summary:
+            lines.extend(["", "Executive Summary:", executive_summary])
+
+        recommendations = data.get('recommendations', [])
+        if recommendations:
+            lines.extend(["", "Recommendations:"])
+            for idx, recommendation in enumerate(recommendations, start=1):
+                lines.append(f"{idx}. {recommendation}")
+
+        lines.extend(["", "Findings:"])
+        for idx, finding in enumerate(data.get('findings', []), start=1):
+            lines.append(f"{idx}. [{str(finding.get('risk_level', 'info')).upper()}] {finding.get('title', 'Untitled')}")
+            lines.append(f"   Description: {finding.get('description', '-')}")
+            lines.append(f"   URL: {finding.get('affected_url', '-')}")
+            lines.append(f"   Tool: {finding.get('tool_name', '-')}")
+            lines.append(f"   Verified: {finding.get('verified', False)}")
+            if finding.get('cwe_id'):
+                lines.append(f"   CWE: {finding.get('cwe_id')}")
+            if finding.get('cvss_score') is not None:
+                lines.append(f"   CVSS: {finding.get('cvss_score')}")
+            if finding.get('recommendation'):
+                lines.append(f"   Recommendation: {finding.get('recommendation')}")
+            evidence = finding.get('evidence') or {}
+            if evidence:
+                lines.append(f"   Evidence: {json.dumps(evidence, ensure_ascii=False)}")
+            lines.append("")
+
+        filepath = self.output_dir / f"report_{scan_id}.pdf"
+
+        try:
+            from reportlab.lib.pagesizes import A4
+            from reportlab.pdfgen import canvas as pdf_canvas
+
+            pdf_bytes = self._build_pdf_from_lines(lines, A4, pdf_canvas)
+        except Exception:
+            pdf_bytes = self._simple_pdf_bytes(lines)
+
+        with open(filepath, "wb") as f:
+            f.write(pdf_bytes)
+
+        self.logger.info(f"PDF report saved: {filepath}")
+        return filepath
+
+    def _build_pdf_from_lines(self, lines: List[str], A4: Any, pdf_canvas: Any) -> bytes:
+        """Build a PDF using reportlab when available."""
+        import io
+
+        buffer = io.BytesIO()
+        pdf = pdf_canvas.Canvas(buffer, pagesize=A4)
+        width, height = A4
+        left = 40
+        y = height - 45
+
+        def draw_line(text: str, indent: int = 0) -> None:
+            nonlocal y
+            if y < 45:
+                pdf.showPage()
+                y = height - 45
+            pdf.setFont("Helvetica", 10)
+            safe = self._pdf_line(text)
+            max_len = 118 - indent // 2
+            if max_len < 20:
+                max_len = 20
+            for i in range(0, len(safe), max_len):
+                pdf.drawString(left + indent, y, safe[i:i + max_len])
+                y -= 13
+
+        pdf.setTitle("WeppenTest Security Report")
+        pdf.setAuthor("WeppenTest")
+        for idx, line in enumerate(lines):
+            if idx == 0:
+                pdf.setFont("Helvetica-Bold", 14)
+                draw_line(line)
+            else:
+                draw_line(line)
+
+        pdf.save()
+        buffer.seek(0)
+        return buffer.getvalue()
+
+    def _simple_pdf_bytes(self, lines: List[str]) -> bytes:
+        def esc(text: str) -> str:
+            return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+        content_lines = ["BT", "/F1 10 Tf", "50 790 Td", "14 TL"]
+        for idx, line in enumerate(lines[:260]):
+            safe = esc((line or "")[:120])
+            if idx == 0:
+                content_lines.append(f"({safe}) Tj")
+            else:
+                content_lines.append("T*")
+                content_lines.append(f"({safe}) Tj")
+        content_lines.append("ET")
+        stream = "\n".join(content_lines).encode("latin-1", errors="replace")
+
+        objects = []
+        objects.append(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n")
+        objects.append(b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n")
+        objects.append(
+            b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n"
+        )
+        objects.append(b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n")
+        objects.append(
+            b"5 0 obj\n<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream\nendobj\n"
+        )
+
+        pdf = bytearray(b"%PDF-1.4\n")
+        offsets = [0]
+        for obj in objects:
+            offsets.append(len(pdf))
+            pdf.extend(obj)
+
+        xref_start = len(pdf)
+        pdf.extend(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+        pdf.extend(b"0000000000 65535 f \n")
+        for offset in offsets[1:]:
+            pdf.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+
+        pdf.extend(
+            f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_start}\n%%EOF\n".encode("ascii")
+        )
+        return bytes(pdf)

@@ -4,6 +4,7 @@ Tool orchestration, error handling, and integration tests
 """
 
 import asyncio
+from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 from unittest.mock import Mock, AsyncMock, MagicMock, patch
 
@@ -131,6 +132,32 @@ class TestScannerEngine:
         engine = ScannerEngine()
         result = engine.get_scan("non-existent-id")
         assert result is None
+
+    def test_create_scan_blocks_when_target_has_active_scan(self):
+        """Test same target cannot start a second non-stale active scan"""
+        engine = ScannerEngine()
+        first_scan = engine.create_scan("https://example.com", "quick")
+
+        with pytest.raises(ValueError) as exc_info:
+            engine.create_scan("https://example.com", "deep")
+
+        error_text = str(exc_info.value)
+        assert "Only one active assessment per target is allowed at a time" in error_text
+        assert f"active_scan_id={first_scan.scan_id}" in error_text
+        assert "status=pending" in error_text
+
+    def test_create_scan_expires_stale_pending_scan_and_continues(self):
+        """Test stale pending active scan is auto-closed before creating new scan"""
+        engine = ScannerEngine()
+        stale_scan = engine.create_scan("https://example.com", "quick")
+        stale_scan.created_at = datetime.now() - timedelta(minutes=10)
+
+        replacement_scan = engine.create_scan("https://example.com", "deep")
+
+        assert replacement_scan.scan_id != stale_scan.scan_id
+        assert stale_scan.status == ScanStatus.FAILED
+        assert stale_scan.error_message == "Stale active assessment was automatically closed"
+        assert stale_scan.completed_at is not None
     
     def test_scan_to_dict(self):
         """Test scan serialization"""

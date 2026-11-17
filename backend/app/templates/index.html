@@ -45,6 +45,11 @@
           <input id="target" name="target" type="text" placeholder="https://target.com" required>
           <div class="target-tags"><span>IPV4/V6</span><span>SSL</span></div>
         </div>
+        <div class="target-field">
+          <label class="sr-only" for="apiKey">API Key</label>
+          <input id="apiKey" name="apiKey" type="password" placeholder="API Key (optional)">
+          <div class="target-tags"><span>AUTH</span><span>OPTIONAL</span></div>
+        </div>
         <div class="hero-actions">
           <button type="submit" class="action-button action-button-primary"><span class="material-symbols-outlined">play_arrow</span><span>Start Scan</span></button>
           <a id="downloadJson" class="action-button action-button-secondary hidden" href="#" download>Export JSON</a>
@@ -122,6 +127,19 @@
         <ul class="result-list endpoint-list" id="vulnList">
           <li class="empty-row">Awaiting deep scan results.</li>
         </ul>
+      </article>
+    </section>
+
+    <section class="bento-grid" style="margin-top: 1.5rem;">
+      <article class="panel" style="grid-column: 1 / -1;">
+        <div class="panel-header">
+          <div class="panel-title-wrap">
+            <div class="panel-icon"><span class="material-symbols-outlined">build</span></div>
+            <div><h2>Security Tools Arsenal</h2><p>Optional tool availability by category</p></div>
+          </div>
+          <div class="panel-meta" id="arsenalCategories">Loading categories…</div>
+        </div>
+        <ul class="result-list" id="arsenalToolList" aria-live="polite"><li class="empty-row">Loading tool status…</li></ul>
       </article>
     </section>
 

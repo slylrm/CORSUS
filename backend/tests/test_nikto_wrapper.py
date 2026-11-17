@@ -15,9 +15,18 @@ class TestNiktoWrapper(unittest.TestCase):
 
     def test_build_command_default(self):
         cmd = self.wrapper._build_command("http://example.com", {})
-        self.assertIn("nikto", cmd[0])
-        self.assertIn("json", cmd)
-        self.assertIn("-output", cmd)
+        flattened = " ".join(cmd).lower()
+        self.assertTrue("perl" in cmd[0].lower() or "nikto" in cmd[0].lower() or "cmd" == cmd[0].lower())
+        self.assertTrue(any("nikto" in part.lower() for part in cmd))
+        self.assertIn("json", flattened)
+        self.assertIn("-output", flattened)
+
+    def test_build_command_adds_maxtime_from_tool_timeout(self):
+        cmd = self.wrapper._build_command("http://example.com", {"tool_timeout": 180, "timeout": 15})
+        flattened = " ".join(cmd)
+
+        self.assertIn("-maxtime", flattened)
+        self.assertIn("150s", flattened)
 
     def test_parse_json_records(self):
         sample = {
@@ -78,6 +87,17 @@ class TestNiktoWrapper(unittest.TestCase):
         result = self.wrapper.run("http://target", {})
         self.assertTrue(result.success)
         self.assertGreaterEqual(len(result.findings), 1)
+
+    def test_run_timeout_without_output_returns_failure(self):
+        def fake_exec(cmd, timeout=300):
+            return SimpleNamespace(stdout="", stderr="Command timed out after 120s", returncode=-1)
+
+        self.wrapper._execute_command = fake_exec  # type: ignore
+        result = self.wrapper.run("http://target", {"timeout": 15, "tool_timeout": 120})
+
+        self.assertFalse(result.success)
+        self.assertEqual(len(result.findings), 0)
+        self.assertTrue(any("timed out" in err.lower() for err in result.errors))
 
 
 if __name__ == "__main__":

@@ -156,19 +156,22 @@ class ResultValidator:
         """Bilinen false positive pattern'lerini kontrol et"""
         
         try:
-            title = finding.title.lower()
-            evidence = str(finding.evidence).lower()
+            title_lower = finding.title.lower()
+            evidence_str = str(finding.evidence).lower()
             
             # SQL Injection false positive patterns
-            if "sql" in title:
+            if "sql" in title_lower:
                 for pattern in self.false_positive_patterns["sql_injection"]:
-                    if re.search(pattern, evidence, re.IGNORECASE):
+                    if re.search(pattern, evidence_str, re.IGNORECASE):
+                        # Time-based indicators are usually reliable
+                        if "sleep" in evidence_str or "benchmark" in evidence_str:
+                            return False
                         return True
             
             # XSS false positive patterns
-            if "xss" in title or "cross-site" in title:
+            if "xss" in title_lower or "cross-site" in title_lower:
                 for pattern in self.false_positive_patterns["xss"]:
-                    if re.search(pattern, evidence, re.IGNORECASE):
+                    if re.search(pattern, evidence_str, re.IGNORECASE):
                         return True
             
             return False
@@ -203,72 +206,6 @@ class ResultValidator:
             finding.is_low_confidence = True
         
         return finding
-        
-        # 1. Evidence kontrolü
-        if not finding.evidence or len(finding.evidence) == 0:
-            self.logger.debug(f"No evidence for: {finding.title}")
-            return False, 0.0
-        
-        # 2. Known false positive kontrolü
-        if self._is_known_false_positive(finding):
-            self.logger.debug(f"Known false positive: {finding.title}")
-            return False, 0.0
-        
-        # 3. Risk seviyesi kontrolü
-        if finding.risk_level == RiskLevel.INFO:
-            confidence *= 0.8
-        
-        # 4. Tool güvenilirliği
-        confidence *= self._get_tool_confidence(finding.evidence.get("tool_name", ""))
-        
-        # 5. Minimum confidence threshold
-        if confidence < 0.6:
-            return False, confidence
-        
-        return True, confidence
-    
-    def _is_known_false_positive(self, finding: Finding) -> bool:
-        """Bilinen false positive pattern'leri kontrol et"""
-        
-        title_lower = finding.title.lower()
-        description_lower = finding.description.lower()
-        
-        # SQL Injection false positives
-        if "sql" in title_lower:
-            evidence_str = str(finding.evidence).lower()
-            for pattern in self.false_positive_patterns["sql_injection"]:
-                if re.search(pattern, evidence_str, re.IGNORECASE):
-                    # Ek kontrol: Gerçekten SQL hatası mı?
-                    if "sleep" in evidence_str or "benchmark" in evidence_str:
-                        return False  # Time-based, güvenilir
-                    return True
-        
-        # XSS false positives
-        if "xss" in title_lower:
-            evidence_str = str(finding.evidence).lower()
-            for pattern in self.false_positive_patterns["xss"]:
-                if re.search(pattern, evidence_str, re.IGNORECASE):
-                    return True
-        
-        return False
-    
-    def _get_tool_confidence(self, tool_name: str) -> float:
-        """
-        Tool'a göre güven skoru
-        
-        Bazı tool'lar daha güvenilirdir
-        """
-        
-        tool_confidence = {
-            "sqlmap": 0.95,      # Çok güvenilir
-            "nmap": 0.98,        # Port scanning kesin
-            "nikto": 0.75,       # Bazen false positive
-            "xsstrike": 0.70,    # XSS detection zor
-            "dalfox": 0.80,
-            "wpscan": 0.85,
-        }
-        
-        return tool_confidence.get(tool_name.lower(), 0.8)
     
     def cross_validate(
         self,

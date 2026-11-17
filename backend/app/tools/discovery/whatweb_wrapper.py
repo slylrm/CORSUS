@@ -9,7 +9,7 @@ Fully compatible with ScannerEngine and ToolRunner architecture.
 """
 
 from typing import Dict, List, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import subprocess
 from pathlib import Path
@@ -120,12 +120,18 @@ class WhatWebWrapper(BaseToolWrapper):
             
             # Build command
             command = self._build_command(target, options)
+            output_path = self._extract_output_path(command)
             
             # Execute whatweb
             result = self._execute_command(command)
             
+            # Prefer JSON log output if available
+            raw_output = result.stdout
+            if output_path and output_path.exists():
+                raw_output = output_path.read_text(encoding="utf-8", errors="replace")
+            
             # Parse output
-            findings_data = self._parse_whatweb_output(result.stdout, target)
+            findings_data = self._parse_whatweb_output(raw_output, target)
             
             duration = (datetime.now() - start_time).total_seconds()
             
@@ -147,6 +153,7 @@ class WhatWebWrapper(BaseToolWrapper):
                 metadata={
                     "technologies_found": len(findings_data),
                     "command": " ".join(command),
+                    "output_path": str(output_path) if output_path else None,
                 }
             )
             
@@ -202,9 +209,12 @@ class WhatWebWrapper(BaseToolWrapper):
             Command as list of strings
         """
         command = [self.whatweb_path]
-        
         # JSON output format (machine-readable)
-        command.append("--log=json=/tmp/whatweb_output.json")
+        output_dir = Path(options.get("output_dir") or self.config.get("output_dir") or "whatweb_output")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = int(datetime.now(timezone.utc).timestamp())
+        output_path = output_dir / f"whatweb_{timestamp}.json"
+        command.append(f"--log=json={output_path}")
         
         # Timeout
         timeout = options.get("timeout", 30)
@@ -235,6 +245,14 @@ class WhatWebWrapper(BaseToolWrapper):
         command.append(target)
         
         return command
+
+    def _extract_output_path(self, command: List[str]) -> Optional[Path]:
+        for token in command:
+            if token.startswith("--log=json="):
+                value = token.split("=", 2)[-1]
+                if value:
+                    return Path(value)
+        return None
     
     def _execute_command(self, command: List[str]) -> subprocess.CompletedProcess:
         """

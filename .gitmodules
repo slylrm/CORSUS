@@ -1,0 +1,6 @@
+[submodule "backend/app/bin/nikto_backup_20260415_140346"]
+	path = backend/app/bin/nikto_backup_20260415_140346
+	url = https://github.com/sullo/nikto.git
+[submodule "backend/app/bin/sqlmap"]
+	path = backend/app/bin/sqlmap
+	url = https://github.com/sqlmapproject/sqlmap.git

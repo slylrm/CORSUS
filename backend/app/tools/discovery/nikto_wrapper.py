@@ -4,8 +4,11 @@ Production-ready tool wrapper compatible with ScannerEngine/ToolRunner.
 """
 
 import json
+import subprocess
+import shutil
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.tools.base import (
@@ -15,6 +18,7 @@ from app.tools.base import (
     RiskLevel,
     ToolCategory,
 )
+from app.config import settings
 from app.utils.logger import logger
 
 
@@ -28,27 +32,153 @@ class NiktoWrapper(BaseToolWrapper):
     requires_sudo = False
 
     def __init__(self, config: Optional[Dict[str, Any]] = None, validate_binary: bool = True):
+        self.config = config or {}
         self.validate_binary = validate_binary
-        super().__init__(config=config)
+        self.nikto_path = self.config.get("path", getattr(settings, "NIKTO_PATH", "nikto"))
+        self.perl_path = self.config.get("perl_path", getattr(settings, "PERL_PATH", "perl"))
+        super().__init__(config=self.config)
+
+    @staticmethod
+    def _normalize_path(raw_path: Any) -> str:
+        return str(raw_path or "").strip().strip('"').strip("'")
+
+    def _resolve_perl_path(self) -> Optional[str]:
+        normalized = self._normalize_path(self.perl_path)
+        if not normalized:
+            return None
+        candidate = Path(normalized)
+        if candidate.is_file():
+            return str(candidate)
+        resolved = shutil.which(normalized)
+        if resolved:
+            return resolved
+        return None
+
+    def _resolve_nikto_path(self) -> Optional[str]:
+        normalized = self._normalize_path(self.nikto_path)
+
+        candidates: List[Path] = []
+        if normalized:
+            candidate = Path(normalized)
+            candidates.append(candidate)
+            if candidate.is_dir():
+                candidates.extend(
+                    [
+                        candidate / "program" / "nikto.pl",
+                        candidate / "nikto.pl",
+                    ]
+                )
+
+        bundled_nikto = Path(__file__).resolve().parents[2] / "bin" / "nikto"
+        candidates.extend(
+            [
+                bundled_nikto / "program" / "nikto.pl",
+                bundled_nikto / "nikto.pl",
+            ]
+        )
+
+        for candidate in candidates:
+            if candidate.is_file():
+                return str(candidate)
+
+        command_name = normalized or "nikto"
+        resolved = shutil.which(command_name)
+        if resolved:
+            return resolved
+        if command_name.lower() != "nikto":
+            fallback = shutil.which("nikto")
+            if fallback:
+                return fallback
+        return None
 
     def _validate_dependencies(self):
         if not getattr(self, "validate_binary", True):
             return
+        resolved_nikto = self._resolve_nikto_path()
+        if not resolved_nikto:
+            git_source = self._resolve_nikto_git_source()
+            if not git_source:
+                raise RuntimeError("nikto is not installed")
+            resolved_perl = self._resolve_perl_path()
+            if not resolved_perl:
+                raise RuntimeError("perl is required to run nikto via git-stream fallback")
+            self.perl_path = resolved_perl
+            logger.warning("Nikto launcher is not directly accessible; using git-stream fallback from {}", git_source)
+            return
+
+        self.nikto_path = resolved_nikto
+        nikto_candidate = Path(resolved_nikto)
+
+        if nikto_candidate.suffix.lower() == ".pl":
+            resolved_perl = self._resolve_perl_path()
+            if not resolved_perl:
+                raise RuntimeError("perl is required to run nikto.pl")
+            self.perl_path = resolved_perl
+
+            if self._is_corrupted_perl_script(nikto_candidate):
+                git_source = self._resolve_nikto_git_source()
+                if not git_source:
+                    raise RuntimeError(f"Nikto script appears corrupted: {nikto_candidate}")
+                logger.warning(
+                    "Nikto script is not readable; using git-stream fallback from {}",
+                    git_source,
+                )
+            return
+
         return super()._validate_dependencies()
 
     def run(self, target: str, options: Optional[Dict[str, Any]] = None) -> ToolResult:
         opts = options or {}
         start_ts = time.time()
-        timeout = int(opts.get("timeout", 300))
+        request_timeout = int(opts.get("timeout", 20))
+        command_timeout = int(opts.get("tool_timeout", max(request_timeout * 6, 120)))
+        nikto_output_file = (settings.NIKTO_OUTPUT_DIR / f"nikto_{datetime.now().timestamp()}.json").resolve()
+        nikto_output_file.parent.mkdir(parents=True, exist_ok=True)
 
-        command = self._build_command(target, opts)
+        command = self._build_command(target, opts, output_file=nikto_output_file)
         errors: List[str] = []
 
         try:
-            result = self._execute_command(command, timeout=timeout)
-            raw_output = result.stdout or ""
-            findings = [f.to_dict() if isinstance(f, Finding) else f for f in self.parse_output(raw_output, target)]
-            success = result.returncode == 0 or bool(findings)
+            result = self._execute_command(command, timeout=command_timeout)
+            stdout = getattr(result, "stdout", "") or ""
+            stderr = getattr(result, "stderr", "") or ""
+            return_code = int(getattr(result, "returncode", 0) or 0)
+
+            file_output = ""
+            if nikto_output_file.exists():
+                try:
+                    file_output = nikto_output_file.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    file_output = ""
+
+            raw_output = stdout + stderr
+            has_file_output = bool(file_output.strip())
+            timed_out = return_code == -1 and "timed out" in stderr.lower()
+
+            parse_source = ""
+            if has_file_output:
+                parse_source = file_output
+            elif return_code == 0 and raw_output.strip():
+                parse_source = raw_output
+
+            findings = [
+                f.to_dict() if isinstance(f, Finding) else f
+                for f in self.parse_output(parse_source, target)
+            ] if parse_source.strip() else []
+
+            if has_file_output:
+                raw_output = f"{raw_output}\n{file_output}" if raw_output else file_output
+
+            if timed_out and not has_file_output:
+                errors.append(f"Nikto timed out after {command_timeout}s with no parsable output")
+            elif return_code != 0:
+                error_detail = stderr.strip() or stdout.strip() or f"Exit code {return_code}"
+                errors.append(error_detail[:500])
+
+            if return_code == 0 and not findings and not raw_output.strip():
+                errors.append("Nikto produced no output; check nikto.pl integrity and runtime dependencies")
+
+            success = (return_code == 0 and not errors) or (bool(findings) and not timed_out)
         except Exception as exc:  # noqa: BLE001
             raw_output = ""
             findings = []
@@ -68,14 +198,50 @@ class NiktoWrapper(BaseToolWrapper):
             findings=findings,
             raw_output=raw_output,
             errors=errors,
-            metadata={"command": " ".join(command)},
+            metadata={
+                "command": " ".join(command),
+                "output_file": str(nikto_output_file),
+                "execution_mode": "git_stream" if self._is_git_stream_command(command) else "direct",
+                "request_timeout": request_timeout,
+                "command_timeout": command_timeout,
+            },
             exit_code=0 if success else 1,
             stdout=raw_output,
-            stderr="",
+            stderr="; ".join(errors),
         )
 
-    def _build_command(self, target: str, opts: Dict[str, Any]) -> List[str]:
-        command = [self.name, "-h", target, "-Format", "json", "-output", "-"]
+    def _build_command(self, target: str, opts: Dict[str, Any], output_file: Optional[Path] = None) -> List[str]:
+        resolved_nikto = self._resolve_nikto_path()
+        output_arg = str(output_file) if output_file is not None else "-"
+        max_runtime_seconds = self._resolve_max_runtime_seconds(opts)
+
+        if not resolved_nikto:
+            git_source = self._resolve_nikto_git_source()
+            if git_source:
+                return self._build_git_stream_command(git_source, target, opts, output_arg)
+            if getattr(self, "validate_binary", True):
+                raise RuntimeError("nikto launcher could not be resolved")
+            resolved_nikto = self._normalize_path(self.nikto_path) or "nikto"
+
+        self.nikto_path = resolved_nikto
+        nikto_candidate = Path(resolved_nikto)
+
+        if nikto_candidate.suffix.lower() == ".pl":
+            if self._is_corrupted_perl_script(nikto_candidate):
+                git_source = self._resolve_nikto_git_source()
+                if not git_source:
+                    raise RuntimeError(f"Nikto script appears corrupted: {nikto_candidate}")
+                return self._build_git_stream_command(git_source, target, opts, output_arg)
+
+            resolved_perl = self._resolve_perl_path()
+            if not resolved_perl:
+                if getattr(self, "validate_binary", True):
+                    raise RuntimeError("perl is required to run nikto.pl")
+                resolved_perl = self._normalize_path(self.perl_path) or "perl"
+            self.perl_path = resolved_perl
+            command = [str(self.perl_path), str(nikto_candidate), "-h", target, "-Format", "json", "-output", output_arg]
+        else:
+            command = [str(self.nikto_path), "-h", target, "-Format", "json", "-output", output_arg]
 
         if opts.get("port"):
             command.extend(["-port", str(opts["port"])])
@@ -85,8 +251,125 @@ class NiktoWrapper(BaseToolWrapper):
             command.extend(["-Plugins", str(opts["plugins"])])
         if opts.get("timeout"):
             command.extend(["-timeout", str(int(opts["timeout"]))])
+        if max_runtime_seconds:
+            command.extend(["-maxtime", f"{max_runtime_seconds}s"])
 
         return command
+
+    def _resolve_max_runtime_seconds(self, opts: Dict[str, Any]) -> Optional[int]:
+        max_runtime = opts.get("max_runtime")
+        if max_runtime is None and opts.get("tool_timeout"):
+            try:
+                # Keep Nikto's own runtime cap slightly below subprocess timeout.
+                max_runtime = max(60, int(opts["tool_timeout"]) - 30)
+            except (TypeError, ValueError):
+                max_runtime = None
+
+        if max_runtime is None:
+            return None
+
+        try:
+            return max(60, int(max_runtime))
+        except (TypeError, ValueError):
+            return None
+
+    def _is_corrupted_perl_script(self, script_path: Path) -> bool:
+        try:
+            sample = script_path.read_bytes()[:4096]
+        except Exception:
+            return True
+
+        if not sample:
+            return True
+
+        # Perl text files should never contain NUL bytes in the header block.
+        if b"\x00" in sample:
+            return True
+
+        text_preview = sample.decode("utf-8", errors="ignore").strip().lower()
+        if not text_preview:
+            return True
+
+        return not ("perl" in text_preview or "nikto" in text_preview)
+
+    def _resolve_nikto_git_source(self) -> Optional[Path]:
+        candidates: List[Path] = []
+
+        explicit_source = self._normalize_path(self.config.get("nikto_git_source"))
+        if explicit_source:
+            candidates.append(Path(explicit_source))
+
+        nikto_candidate = Path(self._normalize_path(self.nikto_path))
+        if nikto_candidate.parts:
+            if nikto_candidate.is_file():
+                try:
+                    bin_dir = nikto_candidate.parents[2]
+                    candidates.extend(sorted(bin_dir.glob("nikto_backup_*"), reverse=True))
+                except Exception:
+                    pass
+            elif nikto_candidate.is_dir():
+                candidates.extend(sorted(nikto_candidate.glob("nikto_backup_*"), reverse=True))
+
+        bundled_bin = Path(__file__).resolve().parents[2] / "bin"
+        if bundled_bin.is_dir():
+            candidates.extend(sorted(bundled_bin.glob("nikto_backup_*"), reverse=True))
+
+        seen: set[str] = set()
+        for candidate in candidates:
+            try:
+                normalized = str(candidate.resolve())
+            except Exception:
+                normalized = str(candidate)
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+
+            if (candidate / ".git").exists():
+                return candidate
+
+        return None
+
+    def _build_git_stream_command(
+        self,
+        source_repo: Path,
+        target: str,
+        opts: Dict[str, Any],
+        output_arg: str,
+    ) -> List[str]:
+        resolved_perl = self._resolve_perl_path()
+        if not resolved_perl:
+            if getattr(self, "validate_binary", True):
+                raise RuntimeError("perl is required to run nikto.pl")
+            resolved_perl = self._normalize_path(self.perl_path) or "perl"
+        self.perl_path = resolved_perl
+
+        nikto_args: List[str] = []
+        config_file = source_repo / "program" / "nikto.conf.default"
+        if config_file.exists():
+            nikto_args.extend(["-config", str(config_file)])
+
+        nikto_args.extend(["-h", target, "-Format", "json", "-output", output_arg])
+        if opts.get("port"):
+            nikto_args.extend(["-port", str(opts["port"])])
+        if opts.get("ssl"):
+            nikto_args.append("-ssl")
+        if opts.get("plugins"):
+            nikto_args.extend(["-Plugins", str(opts["plugins"])])
+        if opts.get("timeout"):
+            nikto_args.extend(["-timeout", str(int(opts["timeout"]))])
+        max_runtime_seconds = self._resolve_max_runtime_seconds(opts)
+        if max_runtime_seconds:
+            nikto_args.extend(["-maxtime", f"{max_runtime_seconds}s"])
+
+        program_dir = source_repo / "program"
+        git_cmd = subprocess.list2cmdline(["git", "-C", str(source_repo), "show", "HEAD:program/nikto.pl"])
+        perl_cmd = subprocess.list2cmdline([str(self.perl_path), "-", *nikto_args])
+        prelude = f"cd /d {subprocess.list2cmdline([str(program_dir)])} & " if program_dir.exists() else ""
+        return ["cmd", "/c", f"{prelude}{git_cmd} | {perl_cmd}"]
+
+    @staticmethod
+    def _is_git_stream_command(command: List[str]) -> bool:
+        return bool(command and command[0].lower() == "cmd" and any("HEAD:program/nikto.pl" in part for part in command))
 
     def parse_output(self, raw_output: str, target: Optional[str] = None) -> List[Dict[str, Any]]:
         findings: List[Dict[str, Any]] = []

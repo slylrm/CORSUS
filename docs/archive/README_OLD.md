@@ -637,4 +637,3 @@ MIT Lisansı - Detaylar için [LICENSE](LICENSE) dosyasına bakın
 **Made with ❤️ for Web Security Community**
 
 *Pentest yapın. Güvenli olun. Geliştirin.*
-

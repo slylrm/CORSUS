@@ -130,70 +130,70 @@ def insert_fingerprint_findings(scan_id: str, tool_result, target_url: str = Non
                 # Generate unique ID if not present
                 finding_id = finding_dict.get('id') or f"finding-{uuid.uuid4()}"
             
-            # Safe JSON serialization for evidence
-            try:
-                evidence_value = finding_dict.get('evidence', {})
-                if isinstance(evidence_value, dict):
-                    evidence_json = json.dumps(evidence_value)
-                else:
-                    evidence_json = str(evidence_value)
-            except (TypeError, ValueError) as e:
-                logger.warning(f"[FINGERPRINT][DB] JSON serialization failed for evidence in finding {finding_id}: {e}")
-                evidence_json = "{}"
+                # Safe JSON serialization for evidence
+                try:
+                    evidence_value = finding_dict.get('evidence', {})
+                    if isinstance(evidence_value, dict):
+                        evidence_json = json.dumps(evidence_value)
+                    else:
+                        evidence_json = str(evidence_value)
+                except (TypeError, ValueError) as e:
+                    logger.warning(f"[FINGERPRINT][DB] JSON serialization failed for evidence in finding {finding_id}: {e}")
+                    evidence_json = "{}"
             
-            # Safe JSON serialization for sources
-            try:
-                sources_json = json.dumps(finding_dict.get('sources', []))
-            except (TypeError, ValueError) as e:
-                logger.warning(f"[FINGERPRINT][DB] JSON serialization failed for sources in finding {finding_id}: {e}")
-                sources_json = "[]"
+                # Safe JSON serialization for sources
+                try:
+                    sources_json = json.dumps(finding_dict.get('sources', []))
+                except (TypeError, ValueError) as e:
+                    logger.warning(f"[FINGERPRINT][DB] JSON serialization failed for sources in finding {finding_id}: {e}")
+                    sources_json = "[]"
             
-            # Validate title (None or empty → "Unknown")
-            title = finding_dict.get('title')
-            if not title or (isinstance(title, str) and not title.strip()):
-                title = 'Unknown'
+                # Validate title (None or empty -> "Unknown")
+                title = finding_dict.get('title')
+                if not title or (isinstance(title, str) and not title.strip()):
+                    title = 'Unknown'
             
-            # Validate risk_level (must be valid level)
-            risk_level = finding_dict.get('risk_level', 'info')
-            valid_risk_levels = ['critical', 'high', 'medium', 'low', 'info']
-            if risk_level not in valid_risk_levels:
-                risk_level = 'info'
+                # Validate risk_level (must be valid level)
+                risk_level = finding_dict.get('risk_level', 'info')
+                valid_risk_levels = ['critical', 'high', 'medium', 'low', 'info']
+                if risk_level not in valid_risk_levels:
+                    risk_level = 'info'
             
-            # Validate confidence_score (None → 0.0)
-            confidence_score = finding_dict.get('confidence_score')
-            if confidence_score is None:
-                confidence_score = 0.0
+                # Validate confidence_score (None -> 0.0)
+                confidence_score = finding_dict.get('confidence_score')
+                if confidence_score is None:
+                    confidence_score = 0.0
             
-            # Validate affected_url (None → target_url)
-            affected_url = finding_dict.get('affected_url')
-            if not affected_url:
-                affected_url = target_url
+                # Validate affected_url (None -> target_url)
+                affected_url = finding_dict.get('affected_url')
+                if not affected_url:
+                    affected_url = target_url
             
-            # Prepare mapping dict
-            mapping = {
-                'id': finding_id,
-                'scan_id': scan_id,
-                'title': title,
-                'description': finding_dict.get('description'),
-                'risk_level': risk_level,
-                'affected_url': affected_url,
-                'tool_name': finding_dict.get('tool_name', 'fingerprint'),
-                'evidence': evidence_json,
-                'recommendation': finding_dict.get('recommendation'),
-                'cwe_id': finding_dict.get('cwe_id'),
-                'cvss_score': finding_dict.get('cvss_score'),
-                'confidence_score': confidence_score,
-                'verification_status': finding_dict.get('verification_status', 'unverified'),
-                'sources': sources_json,
-                'detection_method': finding_dict.get('detection_method', 'automated'),
-                'low_confidence_reason': finding_dict.get('low_confidence_reason'),
-                'is_low_confidence': finding_dict.get('is_low_confidence', False),
-                'is_heuristic': finding_dict.get('is_heuristic', False),
-                'found_at': datetime.utcnow()
-            }
-            mappings.append(mapping)
+                # Prepare mapping dict
+                mapping = {
+                    'id': finding_id,
+                    'scan_id': scan_id,
+                    'title': title,
+                    'description': finding_dict.get('description'),
+                    'risk_level': risk_level,
+                    'affected_url': affected_url,
+                    'tool_name': finding_dict.get('tool_name', 'fingerprint'),
+                    'evidence': evidence_json,
+                    'recommendation': finding_dict.get('recommendation'),
+                    'cwe_id': finding_dict.get('cwe_id'),
+                    'cvss_score': finding_dict.get('cvss_score'),
+                    'confidence_score': confidence_score,
+                    'verification_status': finding_dict.get('verification_status', 'unverified'),
+                    'sources': sources_json,
+                    'detection_method': finding_dict.get('detection_method', 'automated'),
+                    'low_confidence_reason': finding_dict.get('low_confidence_reason'),
+                    'is_low_confidence': finding_dict.get('is_low_confidence', False),
+                    'is_heuristic': finding_dict.get('is_heuristic', False),
+                    'found_at': datetime.utcnow()
+                }
+                mappings.append(mapping)
         
-        # Bulk insert all findings in one operation
+            # Bulk insert all findings in one operation
             session.bulk_insert_mappings(Finding, mappings)
             inserted_count = len(mappings)
             

@@ -513,54 +513,109 @@
             });
         }
 
+        function normalizeRiskLevel(value) {
+            const allowed = ['critical', 'high', 'medium', 'low', 'info'];
+            const normalized = String(value || '').toLowerCase();
+            return allowed.includes(normalized) ? normalized : 'info';
+        }
+
         function displayFindings(data) {
             const container = document.getElementById('findingsContainer');
-            
+            container.textContent = '';
+
             if (!data.findings || data.findings.length === 0) {
-                container.innerHTML = '<p style="text-align: center; color: var(--success);">✓ No vulnerabilities detected</p>';
+                const empty = document.createElement('p');
+                empty.style.textAlign = 'center';
+                empty.style.color = 'var(--success)';
+                empty.textContent = '✓ No vulnerabilities detected';
+                container.appendChild(empty);
                 return;
             }
-            
-            container.innerHTML = '';
-            
+
             data.findings.forEach((finding, index) => {
+                const riskLevel = normalizeRiskLevel(finding.risk_level);
                 const card = document.createElement('div');
-                card.className = `finding-card ${finding.risk_level}`;
-                
-                const confidencePercent = Math.round((finding.confidence_score || 1.0) * 100);
-                const confidenceBadge = finding.confidence_score < 0.8 
-                    ? `<span class="confidence-badge">${confidencePercent}% Confidence</span>`
-                    : '';
-                
-                const verificationNote = finding.requires_manual_verification
-                    ? `<p class="verification-note">⚠️ Manual verification recommended</p>`
-                    : '';
-                
-                const sources = (finding.sources || []).join(', ') || finding.tool_name || 'unknown';
-                
-                card.innerHTML = `
-                    <h4>
-                        ${index + 1}. ${finding.title}
-                        <span class="risk-badge risk-${finding.risk_level}">
-                            ${finding.risk_level.toUpperCase()}
-                        </span>
-                        ${confidenceBadge}
-                    </h4>
-                    <p><strong>Affected URL:</strong> <code>${finding.affected_url}</code></p>
-                    <p>${finding.description}</p>
-                    ${verificationNote}
-                    <p><strong>Detected by:</strong> ${sources}</p>
-                    <details>
-                        <summary>Detection Method & Evidence</summary>
-                        <p><strong>Method:</strong> ${finding.detection_method || 'automated'}</p>
-                        <pre>${JSON.stringify(finding.evidence, null, 2)}</pre>
-                    </details>
-                    <details>
-                        <summary>Remediation</summary>
-                        <p>${finding.recommendation || 'Follow security best practices'}</p>
-                    </details>
-                `;
-                
+                card.className = `finding-card ${riskLevel}`;
+
+                const title = document.createElement('h4');
+                title.appendChild(document.createTextNode(`${index + 1}. ${finding.title || 'Untitled Finding'}`));
+
+                const riskBadge = document.createElement('span');
+                riskBadge.className = `risk-badge risk-${riskLevel}`;
+                riskBadge.textContent = riskLevel.toUpperCase();
+                title.appendChild(document.createTextNode(' '));
+                title.appendChild(riskBadge);
+
+                const confidenceValue = Number.isFinite(finding.confidence_score)
+                    ? finding.confidence_score
+                    : 1.0;
+                if (confidenceValue < 0.8) {
+                    const confidenceBadge = document.createElement('span');
+                    confidenceBadge.className = 'confidence-badge';
+                    confidenceBadge.textContent = `${Math.round(confidenceValue * 100)}% Confidence`;
+                    title.appendChild(document.createTextNode(' '));
+                    title.appendChild(confidenceBadge);
+                }
+
+                const urlRow = document.createElement('p');
+                const urlLabel = document.createElement('strong');
+                urlLabel.textContent = 'Affected URL:';
+                const urlCode = document.createElement('code');
+                urlCode.textContent = finding.affected_url || '-';
+                urlRow.appendChild(urlLabel);
+                urlRow.appendChild(document.createTextNode(' '));
+                urlRow.appendChild(urlCode);
+
+                const description = document.createElement('p');
+                description.textContent = finding.description || '';
+
+                const sources = Array.isArray(finding.sources)
+                    ? finding.sources.join(', ')
+                    : (finding.tool_name || 'unknown');
+
+                const detectedBy = document.createElement('p');
+                const detectedLabel = document.createElement('strong');
+                detectedLabel.textContent = 'Detected by:';
+                detectedBy.appendChild(detectedLabel);
+                detectedBy.appendChild(document.createTextNode(` ${sources}`));
+
+                const details = document.createElement('details');
+                const detailsSummary = document.createElement('summary');
+                detailsSummary.textContent = 'Detection Method & Evidence';
+                const methodRow = document.createElement('p');
+                const methodLabel = document.createElement('strong');
+                methodLabel.textContent = 'Method:';
+                methodRow.appendChild(methodLabel);
+                methodRow.appendChild(document.createTextNode(` ${finding.detection_method || 'automated'}`));
+                const evidencePre = document.createElement('pre');
+                evidencePre.textContent = JSON.stringify(finding.evidence || {}, null, 2);
+                details.appendChild(detailsSummary);
+                details.appendChild(methodRow);
+                details.appendChild(evidencePre);
+
+                const remediation = document.createElement('details');
+                const remediationSummary = document.createElement('summary');
+                remediationSummary.textContent = 'Remediation';
+                const remediationText = document.createElement('p');
+                remediationText.textContent = finding.recommendation || 'Follow security best practices';
+                remediation.appendChild(remediationSummary);
+                remediation.appendChild(remediationText);
+
+                card.appendChild(title);
+                card.appendChild(urlRow);
+                card.appendChild(description);
+
+                if (finding.requires_manual_verification) {
+                    const verificationNote = document.createElement('p');
+                    verificationNote.className = 'verification-note';
+                    verificationNote.textContent = '⚠️ Manual verification recommended';
+                    card.appendChild(verificationNote);
+                }
+
+                card.appendChild(detectedBy);
+                card.appendChild(details);
+                card.appendChild(remediation);
+
                 container.appendChild(card);
             });
         }

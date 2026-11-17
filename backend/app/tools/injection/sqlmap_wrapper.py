@@ -87,14 +87,15 @@ class SQLMapWrapper(BaseToolWrapper):
             "--threads", str(threads),
             "--technique", technique,
             "--batch",  # Non-interactive
-            "--output-dir", str(Path("./sqlmap_output")),
+            "--output-dir", str(settings.SQLMAP_OUTPUT_DIR),
             "--flush-session",  # Her scan için temiz başla
             "--answers", "quit=N",  # Otomatik cevaplar
             "--smart",  # Sadece error-based detection
         ]
         
         # JSON output için
-        json_output_path = Path("./sqlmap_output") / f"scan_{datetime.now().timestamp()}.json"
+        json_output_path = settings.SQLMAP_OUTPUT_DIR / f"scan_{datetime.now().timestamp()}.json"
+        json_output_path.parent.mkdir(parents=True, exist_ok=True)
         
         findings = []
         errors = []
@@ -111,8 +112,12 @@ class SQLMapWrapper(BaseToolWrapper):
             # Validate each finding
             for finding in findings:
                 finding.verified = self.validate_result(finding)
+
+            if result.returncode != 0:
+                error_detail = result.stderr.strip() or result.stdout.strip() or f"Exit code {result.returncode}"
+                errors.append(error_detail[:500])
             
-            success = result.returncode == 0
+            success = result.returncode == 0 or len(findings) > 0
             
         except Exception as e:
             self.logger.error(f"SQLMap execution failed: {e}")

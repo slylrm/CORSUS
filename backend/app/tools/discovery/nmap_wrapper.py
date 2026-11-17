@@ -6,6 +6,7 @@ from typing import Dict, List, Any, Optional
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
+import re
 
 from app.tools.base import (
     BaseToolWrapper,
@@ -48,25 +49,35 @@ class NmapWrapper(BaseToolWrapper):
         options = options or {}
         
         scan_type = options.get("scan_type", "fast")
-        ports = options.get("ports", "80,443,8080,8443")
+        ports = options.get("ports")
+        if isinstance(ports, str):
+            ports = ports.strip() or None
         scripts = options.get("scripts", [])
+        timeout = int(options.get("timeout", 180))
         
-        # XML output için
-        xml_output = Path("./nmap_output") / f"scan_{datetime.now().timestamp()}.xml"
-        xml_output.parent.mkdir(exist_ok=True)
+        # XML output için (canonical path from settings)
+        xml_output = settings.NMAP_OUTPUT_DIR / f"scan_{datetime.now().timestamp()}.xml"
+        xml_output.parent.mkdir(parents=True, exist_ok=True)
         
         # Nmap command
         command = [
             self.nmap_path,
-            "-p", ports,
+            "-Pn",
             "-sV",  # Service version detection
             "-oX", str(xml_output),  # XML output
+            "-oN", "-",  # Normal output to stdout for parser fallback
             "--open",  # Sadece açık portlar
         ]
+
+        if ports:
+            command.extend(["-p", str(ports)])
         
         # Scan type'a göre ayarlar
         if scan_type == "fast":
-            command.extend(["-T4", "-F"])  # Fast scan, common ports
+            command.append("-T4")
+            # -F cannot be combined with explicit -p ranges.
+            if not ports:
+                command.append("-F")  # Fast scan, common ports
         elif scan_type == "full":
             command.extend(["-T4", "-A"])  # Aggressive scan
         elif scan_type == "vuln":
@@ -84,16 +95,25 @@ class NmapWrapper(BaseToolWrapper):
         
         try:
             # Execute Nmap
-            result = self._execute_command(command, timeout=300)
+            result = self._execute_command(command, timeout=timeout)
             raw_output = result.stdout + result.stderr
             
             # Parse XML output
             if xml_output.exists():
                 findings = self.parse_xml_output(xml_output)
-            else:
+
+            if not findings and raw_output:
+                self.logger.info("Falling back to Nmap stdout parser for {}", target)
                 findings = self.parse_output(raw_output)
-            
-            success = result.returncode == 0
+
+            if result.returncode != 0:
+                error_detail = (result.stderr or "").strip()
+                if not error_detail:
+                    output_lines = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+                    error_detail = output_lines[-1] if output_lines else f"Exit code {result.returncode}"
+                errors.append(error_detail[:1000])
+
+            success = result.returncode == 0 or len(findings) > 0
             
         except Exception as e:
             self.logger.error(f"Nmap execution failed: {e}")
@@ -116,6 +136,8 @@ class NmapWrapper(BaseToolWrapper):
                 "scan_type": scan_type,
                 "ports": ports,
                 "scripts": scripts,
+                "timeout": timeout,
+                "command": " ".join(command),
             }
         )
     
@@ -124,12 +146,22 @@ class NmapWrapper(BaseToolWrapper):
         findings = []
         
         try:
-            tree = ET.parse(xml_file)
+            xml_content = xml_file.read_text(encoding="utf-8", errors="replace").strip()
+            if not xml_content:
+                self.logger.warning(f"Nmap XML output is empty: {xml_file}")
+                return findings
+
+            if "</nmaprun>" not in xml_content:
+                self.logger.warning(f"Nmap XML output appears truncated: {xml_file}")
+                return findings
+
+            tree = ET.ElementTree(ET.fromstring(xml_content))
             root = tree.getroot()
             
             for host in root.findall("host"):
                 # Host bilgisi
-                address = host.find("address").get("addr")
+                address_elem = host.find("address")
+                address = address_elem.get("addr") if address_elem is not None else "unknown-host"
                 
                 # Açık portlar
                 ports_elem = host.find("ports")
@@ -138,7 +170,9 @@ class NmapWrapper(BaseToolWrapper):
                         state = port.find("state")
                         if state is not None and state.get("state") == "open":
                             port_id = port.get("portid")
-                            protocol = port.get("protocol")
+                            protocol = port.get("protocol", "tcp")
+                            if not port_id:
+                                continue
                             
                             service = port.find("service")
                             service_name = service.get("name", "unknown") if service is not None else "unknown"
@@ -166,6 +200,8 @@ class NmapWrapper(BaseToolWrapper):
                             
                             findings.append(finding)
             
+        except ET.ParseError as e:
+            self.logger.warning(f"Failed to parse XML, will rely on stdout fallback: {e}")
         except Exception as e:
             self.logger.error(f"Failed to parse XML: {e}")
         
@@ -176,7 +212,6 @@ class NmapWrapper(BaseToolWrapper):
         findings = []
         
         # Simple regex parsing için text output
-        import re
         port_pattern = r"(\d+)/(tcp|udp)\s+open\s+(\S+)"
         
         for match in re.finditer(port_pattern, raw_output):

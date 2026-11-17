@@ -59,6 +59,13 @@ reports/
 nmap_output/
 sqlmap_output/
 nikto_output/
+amass_output/
+gitleaks_output/
+nuclei_output/
+wapiti_output/
+whatweb_output/
+semgrep_output/
+trivy_output/
 tool_outputs/
 
 # Celery

@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import time
 import uuid
+import hashlib
 from pathlib import Path
 from datetime import datetime
 
@@ -57,6 +58,12 @@ def _log_startup_info():
     """
     import platform
     import os
+
+    host = settings.API_HOST or "127.0.0.1"
+    port = settings.API_PORT or 8000
+    dashboard_url = f"http://{host}:{port}/"
+    docs_url = f"http://{host}:{port}/docs"
+    redoc_url = f"http://{host}:{port}/redoc"
     
     logger.info("\n" + "="*80)
     logger.info("[APP] APPLICATION READY FOR USE")
@@ -72,21 +79,21 @@ def _log_startup_info():
     """)
     
     # Suggest appropriate URLs based on context
-    logger.info("   - http://localhost:8000        (most common)")
-    logger.info("   - http://127.0.0.1:8000        (same as localhost)")
+    logger.info(f"   - {dashboard_url}        (recommended local URL)")
+    logger.info(f"   - http://127.0.0.1:{port}        (same machine loopback)")
     logger.info("   - http://<your-machine-ip>:8000 (from remote)")
     
     logger.info("\n[ENDPOINTS] Available:")
-    logger.info("   - Dashboard:      http://localhost:8000/")
-    logger.info("   - API Docs:       http://localhost:8000/docs")
-    logger.info("   - ReDoc:          http://localhost:8000/redoc")
+    logger.info(f"   - Dashboard:      {dashboard_url}")
+    logger.info(f"   - API Docs:       {docs_url}")
+    logger.info(f"   - ReDoc:          {redoc_url}")
     logger.info("   - Start Scan:     POST /api/v1/scans/")
     
     logger.info("\n[SYSTEM] Configuration:")
     logger.info(f"   - OS: {platform.system()} {platform.release()}")
     logger.info(f"   - Python: {platform.python_version()}")
-    logger.info(f"   - Host: 0.0.0.0 (listening on all interfaces)")
-    logger.info(f"   - Port: 8000")
+    logger.info(f"   - Host: {host}")
+    logger.info(f"   - Port: {port}")
     
     logger.info("\n" + "="*80 + "\n")
 
@@ -124,6 +131,40 @@ async def add_process_time_header(request: Request, call_next):
     process_time = time.time() - start_time
     response.headers["X-Process-Time"] = str(process_time)
     return response
+
+
+def _resolve_owner_id(api_key: str) -> str:
+    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+
+
+def _should_enforce_api_key(request: Request) -> bool:
+    return request.url.path.startswith(settings.API_V1_PREFIX)
+
+
+@app.middleware("http")
+async def enforce_api_key(request: Request, call_next):
+    if not _should_enforce_api_key(request):
+        return await call_next(request)
+
+    enforce = settings.API_KEY_REQUIRED or bool(settings.API_KEY)
+    if not enforce:
+        request.state.owner_id = None
+        return await call_next(request)
+
+    expected_key = settings.API_KEY
+    if not expected_key:
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "API key authentication is enabled but API_KEY is not configured"},
+        )
+
+    header_name = settings.API_KEY_HEADER or "X-API-Key"
+    provided_key = request.headers.get(header_name)
+    if not provided_key or provided_key != expected_key:
+        return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
+
+    request.state.owner_id = _resolve_owner_id(provided_key)
+    return await call_next(request)
 
 
 # ✅ Security Headers Middleware (Professional posture)
@@ -224,8 +265,8 @@ async def health_check(request: Request):
     
     # Otherwise return beautiful HTML page
     return templates.TemplateResponse(
-        "health.html",
-        {
+        request=request, name="health.html",
+        context={
             "request": request,
             "app_name": settings.APP_NAME,
             "version": settings.APP_VERSION,
@@ -260,7 +301,7 @@ async def root(request: Request):
         })
     
     # Return HTML page
-    return templates.TemplateResponse("index.html", {
+    return templates.TemplateResponse(request=request, name="index.html", context={
         "request": request,
         "app_name": settings.APP_NAME,
         "version": settings.APP_VERSION,
@@ -270,7 +311,7 @@ async def root(request: Request):
 @app.get("/scan", response_class=HTMLResponse)
 async def scan_page(request: Request):
     """Professional security assessment page"""
-    return templates.TemplateResponse("scan.html", {
+    return templates.TemplateResponse(request=request, name="scan.html", context={
         "request": request,
         "app_name": settings.APP_NAME,
         "version": settings.APP_VERSION,
@@ -280,7 +321,7 @@ async def scan_page(request: Request):
 @app.get("/recon", response_class=HTMLResponse)
 async def recon_page(request: Request):
     """Recon scanner dashboard – CORSUS-style UI"""
-    return templates.TemplateResponse("recon.html", {
+    return templates.TemplateResponse(request=request, name="recon.html", context={
         "request": request,
         "app_name": settings.APP_NAME,
         "version": settings.APP_VERSION,
